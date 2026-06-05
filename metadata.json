@@ -1,0 +1,6 @@
+{
+  "name": "Church Family Meeting",
+  "description": "Arabic-first Church Family Meeting Management and AI-powered voice attendance tracking app.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

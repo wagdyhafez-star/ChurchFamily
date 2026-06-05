@@ -1,0 +1,22 @@
+{
+  "families": [],
+  "attendance": [],
+  "auditLogs": [],
+  "users": [
+    {
+      "email": "wagdy.hafez@gmail.com",
+      "name": "أ. وجدي حافظ",
+      "role": "Super Admin"
+    },
+    {
+      "email": "servant1@church.org",
+      "name": "خادم الاجتماع ۱",
+      "role": "Admin"
+    },
+    {
+      "email": "viewer@church.org",
+      "name": "مشاهد فقط",
+      "role": "Viewer"
+    }
+  ]
+}
