@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
-import { getDatabase, saveDatabase, addAuditLog } from './server_db';
+import { getDatabase, saveDatabase, addAuditLog, rebuildDatabaseConnection } from './server_db';
 import { DbSchema, Family, AttendanceRecord, ChurchUser } from './src/types';
 
 // Lazy-loaded Gemini AI client to prevent crash on startup if key is missing
@@ -259,6 +259,24 @@ app.post('/api/db/restore', (req, res) => {
     res.json({ success: true, db: clearedDb });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// 7.5. Rebuild / Refresh Database Connection
+app.post('/api/db/rebuild-connection', (req, res) => {
+  try {
+    const { userEmail, userRole } = req.body;
+    const result = rebuildDatabaseConnection();
+    
+    if (result.success) {
+      const db = getDatabase();
+      addAuditLog(userEmail || 'System', userRole || 'Super Admin', 'إعادة بناء الاتصال', `تم إعادة بناء الاتصال بملف قاعدة البيانات بنجاح: ${result.filePath}`);
+      res.json({ success: true, filePath: result.filePath, db });
+    } else {
+      res.status(500).json({ success: false, error: 'Failed to rebuild database file path connection', filePath: result.filePath });
+    }
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

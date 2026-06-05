@@ -226,6 +226,27 @@ export default function App() {
     }
   };
 
+  const handleRebuildDatabaseConnection = async (): Promise<{ success: boolean; filePath?: string; error?: string }> => {
+    try {
+      const res = await fetch('/api/db/rebuild-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userEmail: activeUser.email,
+          userRole: activeUser.role
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'فشلت عملية إعادة بناء الاتصال.' };
+      }
+      await fetchDatabase();
+      return { success: true, filePath: data.filePath };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'حدث خطأ أثناء الاتصال بالخادم.' };
+    }
+  };
+
   // QR Quick simulator scan
   const executeQrScanSimulator = () => {
     if (!qrSelectedFamilyId) return;
@@ -424,6 +445,7 @@ export default function App() {
             activeUser={activeUser}
             onSelectUser={(usr) => setActiveUser(usr)}
             onRestoreDatabase={handleRestoreDatabase}
+            onRebuildDatabaseConnection={handleRebuildDatabaseConnection}
             userRole={activeUser.role}
           />
         );

@@ -56,8 +56,31 @@ function resolveDatabasePath(): string {
   return path.join('/tmp', 'church_db.json');
 }
 
-const DB_FILE_PATH = resolveDatabasePath();
+export let DB_FILE_PATH = resolveDatabasePath();
 console.log(`[Database Connection] Active database file path is resolved to: ${DB_FILE_PATH}`);
+
+export function rebuildDatabaseConnection(): { success: boolean; filePath: string } {
+  try {
+    DB_FILE_PATH = resolveDatabasePath();
+    console.log(`[Database Connection] Manually rebuilt database connection. Path resolved to: ${DB_FILE_PATH}`);
+    
+    // Check if the file is readable/writable or if we need to create it
+    if (!fs.existsSync(DB_FILE_PATH)) {
+      const defaultDb: DbSchema = {
+        families: [],
+        attendance: [],
+        auditLogs: [],
+        users: DEFAULT_USERS
+      };
+      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(defaultDb, null, 2), 'utf8');
+    }
+    
+    return { success: true, filePath: DB_FILE_PATH };
+  } catch (err: any) {
+    console.error('[Database Connection] Failed to manually rebuild database connection', err);
+    return { success: false, filePath: DB_FILE_PATH || '' };
+  }
+}
 
 const DEFAULT_USERS: ChurchUser[] = [
   { email: 'wagdy.hafez@gmail.com', name: 'أ. وجدي حافظ', role: 'Super Admin' },

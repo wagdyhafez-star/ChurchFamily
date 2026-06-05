@@ -15,6 +15,7 @@ interface SystemSettingsProps {
   activeUser: ChurchUser;
   onSelectUser: (user: ChurchUser) => void;
   onRestoreDatabase: () => Promise<void>;
+  onRebuildDatabaseConnection: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
   userRole: string;
 }
 
@@ -24,12 +25,28 @@ export default function SystemSettings({
   activeUser,
   onSelectUser,
   onRestoreDatabase,
+  onRebuildDatabaseConnection,
   userRole
 }: SystemSettingsProps) {
   const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'docs' | 'db'>('users');
   const [restoring, setRestoring] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [showRestoreSuccess, setShowRestoreSuccess] = useState(false);
+  
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildFeedback, setRebuildFeedback] = useState<{ success: boolean; filePath?: string; error?: string } | null>(null);
+
+  const handleRebuildConnection = async () => {
+    setRebuilding(true);
+    setRebuildFeedback(null);
+    try {
+      const result = await onRebuildDatabaseConnection();
+      setRebuildFeedback(result);
+    } catch (e: any) {
+      setRebuildFeedback({ success: false, error: e.message || 'Error occurred.' });
+    }
+    setRebuilding(false);
+  };
 
   // Trigger restore
   const handleRestore = async () => {
@@ -212,17 +229,20 @@ export default function SystemSettings({
 
         {activeTab === 'db' && (
           <div className="space-y-6">
-            <h3 className="text-sm font-bold text-stone-905">أدوات استرداد الكوارث والطوارئ</h3>
+            <h3 className="text-sm font-bold text-stone-905">أدوات استرداد الكوارث والطوارئ وحوكمة البيانات</h3>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="border border-stone-200 rounded-2xl p-5 space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-amber-50 rounded-lg text-amber-600">
-                    <Download className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-stone-900 text-sm">تنزيل نسخة احتياطية كاملة (JSON Local Backup)</h4>
-                    <p className="text-xs text-stone-500">تنزيل ملف بالكامل في صيغة JSON يحتوي على الأسر الحالية، سجلات التدقيق، والمسجلات.</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Card 1: Copy Backup */}
+              <div className="border border-stone-200 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-amber-50 rounded-lg text-amber-600">
+                      <Download className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-stone-900 text-sm">تنزيل نسخة احتياطية كاملة (JSON Local Backup)</h4>
+                      <p className="text-xs text-stone-500 font-semibold leading-normal">تنزيل ملف بالكامل في صيغة JSON يحتوي على الأسر الحالية، سجلات التدقيق، والمسجلات.</p>
+                    </div>
                   </div>
                 </div>
 
@@ -230,21 +250,63 @@ export default function SystemSettings({
                   <button
                     type="button"
                     onClick={downloadJsonBackup}
-                    className="w-full bg-stone-900 hover:bg-stone-850 text-white text-xs font-bold py-2 px-4 rounded-xl transition-colors"
+                    className="w-full bg-stone-900 hover:bg-stone-850 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors cursor-pointer"
                   >
                     بدء تصدير ملف النسخة الاحتياطية
                   </button>
                 </div>
               </div>
 
-              <div className="border border-amber-205 border-dashed border-stone-200 rounded-2xl p-5 space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-red-50 rounded-lg text-red-650">
-                    <RefreshCw className="w-5 h-5" />
+              {/* Card 2: Manual Rebuild DB Connection */}
+              <div className="border border-stone-250 rounded-2xl p-5 space-y-4 flex flex-col justify-between bg-blue-50/10">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-blue-50 rounded-lg text-blue-650">
+                      <Server className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-stone-900 text-sm">إعادة فحص وبناء الاتصال (Rebuild DB Connection)</h4>
+                      <p className="text-xs text-stone-500 font-semibold leading-normal">يقوم يدويًا بإعادة فحص وبناء الاتصال بالمسار الفعلي المتاح للكتابة على خادم السحاب والتحقق من سلامة الملف.</p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="font-bold text-stone-900 text-sm">استعادة وضبط المصنع (Revert Database Initialize)</h4>
-                    <p className="text-xs text-red-800 font-bold">سيقوم هذا بحذف الترتيبات الحالية وإعادة تصفية قاعدة البيانات كلياً وتطهير السجلات لبدء العام الجديد.</p>
+                </div>
+
+                <div className="pt-2 space-y-3">
+                  <button
+                    type="button"
+                    disabled={rebuilding}
+                    onClick={handleRebuildConnection}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors cursor-pointer"
+                  >
+                    {rebuilding ? 'جاري إعادة فحص وبناء الاتصال...' : 'إعادة بناء وتأمين اتصال قاعدة البيانات 🔄'}
+                  </button>
+
+                  {rebuildFeedback && (
+                    <div className={`p-3 rounded-xl text-[11px] font-bold ${rebuildFeedback.success ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-red-50 border border-red-200 text-red-850'}`}>
+                      {rebuildFeedback.success ? (
+                        <div className="space-y-1">
+                          <p>✅ تم إعادة الاتصال بنجاح!</p>
+                          <p className="font-mono text-[9px] break-all opacity-85">{rebuildFeedback.filePath}</p>
+                        </div>
+                      ) : (
+                        <p>❌ خطأ: {rebuildFeedback.error}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Card 3: Reset App */}
+              <div className="border border-amber-205 border-dashed border-stone-200 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-red-50 rounded-lg text-red-650">
+                      <RefreshCw className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-stone-900 text-sm">استعادة وضبط المصنع (Revert Database Initialize)</h4>
+                      <p className="text-xs text-red-800 font-bold leading-normal">سيقوم هذا بحذف الترتيبات الحالية وإعادة تصفية قاعدة البيانات كلياً وتطهير السجلات لبدء العام الجديد.</p>
+                    </div>
                   </div>
                 </div>
 
@@ -253,7 +315,7 @@ export default function SystemSettings({
                     type="button"
                     disabled={restoring || userRole !== 'Super Admin'}
                     onClick={handleRestore}
-                    className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold py-2 px-4 rounded-xl transition-colors"
+                    className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors cursor-pointer"
                   >
                     {restoring ? 'جاري إعادة التهيئة...' : 'إعادة تهيئة وضبط قاعدة البيانات'}
                   </button>
