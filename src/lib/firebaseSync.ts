@@ -1,4 +1,5 @@
 import { initializeApp, getApp, getApps, FirebaseApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
 import { 
   getFirestore, 
   collection, 
@@ -6,7 +7,6 @@ import {
   doc, 
   setDoc, 
   deleteDoc, 
-  writeBatch, 
   Firestore,
   query,
   orderBy,
@@ -22,7 +22,73 @@ export interface FirebaseConfig {
   messagingSenderId?: string;
   appId: string;
   measurementId?: string;
+  firestoreDatabaseId?: string;
 }
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  let currentUser: any = null;
+  try {
+    const auth = getAuth();
+    currentUser = auth.currentUser;
+  } catch (e) {
+    // Ignore if Auth is not yet initialized or fails to resolve
+  }
+
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: currentUser?.uid || null,
+      email: currentUser?.email || null,
+      emailVerified: currentUser?.emailVerified || null,
+      isAnonymous: currentUser?.isAnonymous || null,
+      tenantId: currentUser?.tenantId || null,
+      providerInfo: currentUser?.providerData?.map((provider: any) => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// Timeout utility for making sure Firebase never hangs the application indefinitely
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 6000): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Firebase Request Timeout (6s)')), timeoutMs)
+    )
+  ]);
+};
 
 // Retrieve config from Vercel system Environment Variables, Local Browser Storage, or the live provisioned Firebase project
 export const getFirebaseConfig = (): FirebaseConfig | null => {
@@ -35,7 +101,8 @@ export const getFirebaseConfig = (): FirebaseConfig | null => {
     projectId: "impressive-hangout-r71nt",
     storageBucket: "impressive-hangout-r71nt.firebasestorage.app",
     messagingSenderId: "191146276382",
-    appId: "1:191146276382:web:f8d5d4797d8cca96c8200f"
+    appId: "1:191146276382:web:f8d5d4797d8cca96c8200f",
+    firestoreDatabaseId: "ai-studio-c82cfa66-a4b0-4ca2-b17d-3c433d16c035"
   };
 
   // Option 2: Env variable stringified JSON configuration
@@ -57,6 +124,7 @@ export const getFirebaseConfig = (): FirebaseConfig | null => {
       storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || `${metaEnv.VITE_FIREBASE_PROJECT_ID}.appspot.com`,
       messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID,
       appId: metaEnv.VITE_FIREBASE_APP_ID || '',
+      firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID,
     };
   }
 
@@ -94,7 +162,12 @@ export const getFirestoreDb = (): Firestore | null => {
     } else {
       firebaseAppInstance = getApp();
     }
-    firestoreInstance = getFirestore(firebaseAppInstance);
+    
+    if (config.firestoreDatabaseId) {
+      firestoreInstance = getFirestore(firebaseAppInstance, config.firestoreDatabaseId);
+    } else {
+      firestoreInstance = getFirestore(firebaseAppInstance);
+    }
     return firestoreInstance;
   } catch (error) {
     console.error('[FirebaseSync] Initialization error:', error);
@@ -107,67 +180,83 @@ export const getFirestoreDb = (): Firestore | null => {
 export const fetchFamiliesFromFirebase = async (): Promise<Family[]> => {
   const db = getFirestoreDb();
   if (!db) return [];
+  const colPath = 'families';
   try {
-    const q = query(collection(db, 'families'), orderBy('husbandName', 'asc'));
-    const snapshot = await getDocs(q);
+    const q = query(collection(db, colPath), orderBy('husbandName', 'asc'));
+    const snapshot = await withTimeout(getDocs(q));
     const list: Family[] = [];
     snapshot.forEach((snapDoc) => {
       list.push({ ...snapDoc.data(), id: snapDoc.id } as Family);
     });
     return list;
-  } catch (err) {
-    console.error('[FirebaseSync] Error fetching families:', err);
-    throw err;
+  } catch (err: any) {
+    if (err.message && err.message.includes('Timeout')) {
+       console.error('[FirebaseSync] Timeout error fetching families:', err);
+       throw err;
+    }
+    handleFirestoreError(err, OperationType.GET, colPath);
   }
 };
 
 export const fetchAttendanceFromFirebase = async (): Promise<AttendanceRecord[]> => {
   const db = getFirestoreDb();
   if (!db) return [];
+  const colPath = 'attendance';
   try {
-    const q = query(collection(db, 'attendance'), orderBy('date', 'desc'));
-    const snapshot = await getDocs(q);
+    const q = query(collection(db, colPath), orderBy('date', 'desc'));
+    const snapshot = await withTimeout(getDocs(q));
     const list: AttendanceRecord[] = [];
     snapshot.forEach((snapDoc) => {
       list.push(snapDoc.data() as AttendanceRecord);
     });
     return list;
-  } catch (err) {
-    console.error('[FirebaseSync] Error fetching attendance:', err);
-    throw err;
+  } catch (err: any) {
+    if (err.message && err.message.includes('Timeout')) {
+       console.error('[FirebaseSync] Timeout error fetching attendance:', err);
+       throw err;
+    }
+    handleFirestoreError(err, OperationType.GET, colPath);
   }
 };
 
 export const fetchAuditLogsFromFirebase = async (): Promise<AuditLog[]> => {
   const db = getFirestoreDb();
   if (!db) return [];
+  const colPath = 'auditLogs';
   try {
-    const q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(150));
-    const snapshot = await getDocs(q);
+    const q = query(collection(db, colPath), orderBy('timestamp', 'desc'), limit(150));
+    const snapshot = await withTimeout(getDocs(q));
     const list: AuditLog[] = [];
     snapshot.forEach((snapDoc) => {
       list.push({ ...snapDoc.data(), id: snapDoc.id } as AuditLog);
     });
     return list;
-  } catch (err) {
-    console.error('[FirebaseSync] Error fetching audit logs:', err);
-    throw err;
+  } catch (err: any) {
+    if (err.message && err.message.includes('Timeout')) {
+       console.error('[FirebaseSync] Timeout error fetching audit logs:', err);
+       throw err;
+    }
+    handleFirestoreError(err, OperationType.GET, colPath);
   }
 };
 
 export const fetchUsersFromFirebase = async (): Promise<ChurchUser[]> => {
   const db = getFirestoreDb();
   if (!db) return [];
+  const colPath = 'users';
   try {
-    const snapshot = await getDocs(collection(db, 'users'));
+    const snapshot = await withTimeout(getDocs(collection(db, colPath)));
     const list: ChurchUser[] = [];
     snapshot.forEach((snapDoc) => {
       list.push(snapDoc.data() as ChurchUser);
     });
     return list;
-  } catch (err) {
-    console.error('[FirebaseSync] Error fetching users:', err);
-    throw err;
+  } catch (err: any) {
+    if (err.message && err.message.includes('Timeout')) {
+       console.error('[FirebaseSync] Timeout error fetching users:', err);
+       throw err;
+    }
+    handleFirestoreError(err, OperationType.GET, colPath);
   }
 };
 
@@ -175,12 +264,12 @@ export const fetchUsersFromFirebase = async (): Promise<ChurchUser[]> => {
 export const saveFamilyToFirebase = async (family: Family): Promise<void> => {
   const db = getFirestoreDb();
   if (!db) return;
+  const path = `families/${family.id}`;
   try {
     const docRef = doc(db, 'families', family.id);
-    await setDoc(docRef, family);
+    await withTimeout(setDoc(docRef, family));
   } catch (err) {
-    console.error('[FirebaseSync] Fail to set family:', err);
-    throw err;
+    handleFirestoreError(err, OperationType.WRITE, path);
   }
 };
 
@@ -188,11 +277,11 @@ export const saveFamilyToFirebase = async (family: Family): Promise<void> => {
 export const deleteFamilyFromFirebase = async (id: string): Promise<void> => {
   const db = getFirestoreDb();
   if (!db) return;
+  const path = `families/${id}`;
   try {
-    await deleteDoc(doc(db, 'families', id));
+    await withTimeout(deleteDoc(doc(db, 'families', id)));
   } catch (err) {
-    console.error('[FirebaseSync] Fail to delete family:', err);
-    throw err;
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 };
 
@@ -200,13 +289,13 @@ export const deleteFamilyFromFirebase = async (id: string): Promise<void> => {
 export const saveAttendanceToFirebase = async (record: AttendanceRecord): Promise<void> => {
   const db = getFirestoreDb();
   if (!db) return;
+  const path = `attendance/${record.date}`;
   try {
     // We use date as the document key to enforce uniqueness per day and avoid duplicate entries
     const docRef = doc(db, 'attendance', record.date);
-    await setDoc(docRef, record);
+    await withTimeout(setDoc(docRef, record));
   } catch (err) {
-    console.error('[FirebaseSync] Fail to set attendance:', err);
-    throw err;
+    handleFirestoreError(err, OperationType.WRITE, path);
   }
 };
 
@@ -214,12 +303,12 @@ export const saveAttendanceToFirebase = async (record: AttendanceRecord): Promis
 export const saveAuditLogToFirebase = async (log: AuditLog): Promise<void> => {
   const db = getFirestoreDb();
   if (!db) return;
+  const path = `auditLogs/${log.id}`;
   try {
     const docRef = doc(db, 'auditLogs', log.id);
-    await setDoc(docRef, log);
+    await withTimeout(setDoc(docRef, log));
   } catch (err) {
-    console.error('[FirebaseSync] Fail to set log:', err);
-    throw err;
+    handleFirestoreError(err, OperationType.WRITE, path);
   }
 };
 
@@ -227,14 +316,13 @@ export const saveAuditLogToFirebase = async (log: AuditLog): Promise<void> => {
 export const saveUserToFirebase = async (user: ChurchUser): Promise<void> => {
   const db = getFirestoreDb();
   if (!db) return;
+  const safeEmailKey = user.email.replace(/\./g, '_');
+  const path = `users/${safeEmailKey}`;
   try {
-    // Use email as key
-    const safeEmailKey = user.email.replace(/\./g, '_');
     const docRef = doc(db, 'users', safeEmailKey);
-    await setDoc(docRef, user);
+    await withTimeout(setDoc(docRef, user));
   } catch (err) {
-    console.error('[FirebaseSync] Fail to set user:', err);
-    throw err;
+    handleFirestoreError(err, OperationType.WRITE, path);
   }
 };
 
