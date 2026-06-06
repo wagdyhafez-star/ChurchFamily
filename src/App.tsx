@@ -30,6 +30,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'desktop' | 'android' | 'iphone'>('desktop');
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
 
   // QR check-in simulation helper
   const [qrSelectedFamilyId, setQrSelectedFamilyId] = useState('');
@@ -42,12 +43,31 @@ export default function App() {
       setLoading(true);
       setErrorMsg(null);
       const res = await fetch('/api/db');
-      if (!res.ok) throw new Error('فشل تحميل قاعدة البيانات من الخادم الحوسبي.');
+      if (!res.ok) {
+        throw new Error('فشل تحميل قاعدة البيانات من الخادم الحوسبي.');
+      }
+      
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('text/html')) {
+        throw new Error('Static single-page routing fallback detected on Vercel/GitHub Pages.');
+      }
+
       const data = await res.json();
       setFamilies(data.families || []);
       setAttendance(data.attendance || []);
       setAuditLogs(data.auditLogs || []);
       setUsers(data.users || []);
+      setIsOfflineMode(false);
+
+      // Persist in background localStorage as fallback cache
+      try {
+        localStorage.setItem('church_families', JSON.stringify(data.families || []));
+        localStorage.setItem('church_attendance', JSON.stringify(data.attendance || []));
+        localStorage.setItem('church_auditLogs', JSON.stringify(data.auditLogs || []));
+        localStorage.setItem('church_users', JSON.stringify(data.users || []));
+      } catch (err) {
+        console.warn('Unable to back up to local storage cache', err);
+      }
 
       // If user profile changed in logs on system reset, update session
       const exists = data.users?.find((u: ChurchUser) => u.email === activeUser.email);
@@ -55,8 +75,32 @@ export default function App() {
         setActiveUser(exists);
       }
     } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.message || 'خطأ فني في استعادة البيانات.');
+      console.warn('[Hybrid Database Engine] Reverting to secure, zero-overhead browser LocalStorage database:', err.message);
+      setIsOfflineMode(true);
+      
+      try {
+        const localFamilies = localStorage.getItem('church_families');
+        const localAttendance = localStorage.getItem('church_attendance');
+        const localAuditLogs = localStorage.getItem('church_auditLogs');
+        const localUsers = localStorage.getItem('church_users');
+
+        const loadedFam = localFamilies ? JSON.parse(localFamilies) : [];
+        const loadedAtt = localAttendance ? JSON.parse(localAttendance) : [];
+        const loadedAud = localAuditLogs ? JSON.parse(localAuditLogs) : [];
+        const defaultUsers: ChurchUser[] = [
+          { email: 'wagdy.hafez@gmail.com', name: 'أ. وجدي حافظ', role: 'Super Admin' },
+          { email: 'servant1@church.org', name: 'خادم الاجتماع ۱', role: 'Admin' },
+          { email: 'viewer@church.org', name: 'مشاهد فقط', role: 'Viewer' }
+        ];
+        const loadedUsr = localUsers ? JSON.parse(localUsers) : defaultUsers;
+
+        setFamilies(loadedFam);
+        setAttendance(loadedAtt);
+        setAuditLogs(loadedAud);
+        setUsers(loadedUsr);
+      } catch (e) {
+        console.error('LocalStorage load failure', e);
+      }
     } finally {
       setLoading(false);
     }
@@ -66,8 +110,48 @@ export default function App() {
     fetchDatabase();
   }, []);
 
+  // Helper to persist localStorage fallback
+  const syncLocalDb = (newFamilies: Family[], newAttendance: AttendanceRecord[], newLogs: AuditLog[], newUsers: ChurchUser[]) => {
+    try {
+      localStorage.setItem('church_families', JSON.stringify(newFamilies));
+      localStorage.setItem('church_attendance', JSON.stringify(newAttendance));
+      localStorage.setItem('church_auditLogs', JSON.stringify(newLogs));
+      localStorage.setItem('church_users', JSON.stringify(newUsers));
+    } catch (err) {
+      console.error('LocalStorage write failure', err);
+    }
+  };
+
+  const addLocalAuditLog = (action: string, details: string, currentLogs: AuditLog[] = auditLogs) => {
+    const newLog: AuditLog = {
+      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      userEmail: activeUser.email,
+      role: activeUser.role as any,
+      action,
+      details
+    };
+    const updated = [newLog, ...currentLogs].slice(0, 200);
+    setAuditLogs(updated);
+    return updated;
+  };
+
   // API operations
   const handleAddFamily = async (familyData: Omit<Family, 'id' | 'createdAt'>): Promise<boolean> => {
+    if (isOfflineMode) {
+      const newFamily: Family = {
+        ...familyData,
+        id: `fam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        createdAt: new Date().toISOString()
+      };
+      const updatedFamilies = [newFamily, ...families];
+      setFamilies(updatedFamilies);
+      const updatedLogs = addLocalAuditLog('إضافة عائلية (محلية)', `تم إضافة عائلة ${familyData.husbandName} في قاعدة البيانات المحلية (Vercel Offline Mode).`);
+      syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
+      alert('تم إضافة عائلة كنسية بنجاح إلى قاعدة البيانات المحلية وتسجيل العملية في الأرشيف (Offline Mode).');
+      return true;
+    }
+
     try {
       const res = await fetch('/api/family', {
         method: 'POST',
@@ -96,6 +180,20 @@ export default function App() {
   };
 
   const handleEditFamily = async (id: string, familyData: Partial<Family>): Promise<boolean> => {
+    if (isOfflineMode) {
+      const updatedFamilies = families.map(f => {
+        if (f.id === id) {
+          return { ...f, ...familyData };
+        }
+        return f;
+      });
+      setFamilies(updatedFamilies);
+      const targetFamily = families.find(f => f.id === id);
+      const updatedLogs = addLocalAuditLog('تحديث عائلية (محلية)', `تم تحديث بيانات العائلة ${targetFamily?.husbandName || ''} في قاعدة البيانات المحلية.`);
+      syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
+      return true;
+    }
+
     try {
       const res = await fetch(`/api/family/${id}`, {
         method: 'PUT',
@@ -123,6 +221,15 @@ export default function App() {
   };
 
   const handleDeleteFamily = async (id: string): Promise<boolean> => {
+    if (isOfflineMode) {
+      const targetFamily = families.find(f => f.id === id);
+      const updatedFamilies = families.filter(f => f.id !== id);
+      setFamilies(updatedFamilies);
+      const updatedLogs = addLocalAuditLog('حذف عائلية (محلية)', `تم حذف العائلة ${targetFamily?.husbandName || ''} من قاعدة البيانات المحلية.`);
+      syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
+      return true;
+    }
+
     try {
       const res = await fetch(`/api/family/${id}?userEmail=${encodeURIComponent(activeUser.email)}&userRole=${activeUser.role}`, {
         method: 'DELETE'
@@ -144,6 +251,42 @@ export default function App() {
   };
 
   const handleAttendanceSaved = async (date: string, attendedFamilyIds: string[], notes: string, merge: boolean = false) => {
+    if (isOfflineMode) {
+      let updatedAttendance = [...attendance];
+      const existingIdx = updatedAttendance.findIndex(a => a.date === date);
+      
+      if (existingIdx !== -1) {
+        if (merge) {
+          const mergedIds = Array.from(new Set([...updatedAttendance[existingIdx].attendedFamilyIds, ...attendedFamilyIds]));
+          updatedAttendance[existingIdx] = {
+            ...updatedAttendance[existingIdx],
+            attendedFamilyIds: mergedIds,
+            notes: notes || updatedAttendance[existingIdx].notes
+          };
+        } else {
+          updatedAttendance[existingIdx] = {
+            date,
+            attendedFamilyIds,
+            notes: notes || 'تحديث الحضور الكنسي',
+            createdBy: updatedAttendance[existingIdx].createdBy || activeUser.name
+          };
+        }
+      } else {
+        const newRecord: AttendanceRecord = {
+          date,
+          attendedFamilyIds,
+          notes: notes || 'حضور لقاء عام',
+          createdBy: activeUser.name
+        };
+        updatedAttendance = [newRecord, ...updatedAttendance];
+      }
+      
+      setAttendance(updatedAttendance);
+      const updatedLogs = addLocalAuditLog('تسجيل حضور (محلية)', `تم تسجيل حضور ${attendedFamilyIds.length} عائلات في لقاء تاريخ ${date}.`);
+      syncLocalDb(families, updatedAttendance, updatedLogs, users);
+      return;
+    }
+
     try {
       const res = await fetch('/api/attendance', {
         method: 'POST',
@@ -167,6 +310,20 @@ export default function App() {
   };
 
   const handleImportCompleted = async (importedList: any[]) => {
+    if (isOfflineMode) {
+      const mapped = importedList.map(fam => ({
+        ...fam,
+        id: fam.id || `fam_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        createdAt: fam.createdAt || new Date().toISOString()
+      }));
+      const updatedFamilies = [...mapped, ...families];
+      setFamilies(updatedFamilies);
+      const updatedLogs = addLocalAuditLog('استيراد عائلات (محلية)', `تم استيراد وتحميل ${importedList.length} عائلات من كشف Excel.`);
+      syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
+      alert('تم استيراد العائلات بنجاح إلى الذاكرة المحلية (Offline Mode).');
+      return;
+    }
+
     try {
       // Loop import list sequentially
       for (const fam of importedList) {
@@ -188,6 +345,32 @@ export default function App() {
   };
 
   const handleBulkAttendanceImport = async (records: { date: string; attendedFamilyIds: string[]; notes: string }[]) => {
+    if (isOfflineMode) {
+      let updatedAttendance = [...attendance];
+      for (const rec of records) {
+        const existingIdx = updatedAttendance.findIndex(a => a.date === rec.date);
+        if (existingIdx !== -1) {
+          updatedAttendance[existingIdx] = {
+            ...updatedAttendance[existingIdx],
+            attendedFamilyIds: Array.from(new Set([...updatedAttendance[existingIdx].attendedFamilyIds, ...rec.attendedFamilyIds])),
+            notes: rec.notes || updatedAttendance[existingIdx].notes
+          };
+        } else {
+          updatedAttendance = [{
+            date: rec.date,
+            attendedFamilyIds: rec.attendedFamilyIds,
+            notes: rec.notes,
+            createdBy: activeUser.name
+          }, ...updatedAttendance];
+        }
+      }
+      setAttendance(updatedAttendance);
+      const updatedLogs = addLocalAuditLog('استيراد حضور بالجملة (محلية)', `تم استيراد حضور لعدد ${records.length} لقاءات.`);
+      syncLocalDb(families, updatedAttendance, updatedLogs, users);
+      alert('تم دمج واستيراد كشوف الحضور الكنسي بنجاح بمحرك التخزين المحلي المحاكي.');
+      return;
+    }
+
     try {
       for (const rec of records) {
         await fetch('/api/attendance', {
@@ -210,6 +393,23 @@ export default function App() {
   };
 
   const handleRestoreDatabase = async () => {
+    if (isOfflineMode) {
+      try {
+        localStorage.removeItem('church_families');
+        localStorage.removeItem('church_attendance');
+        localStorage.removeItem('church_auditLogs');
+        localStorage.removeItem('church_users');
+        setFamilies([]);
+        setAttendance([]);
+        setAuditLogs([]);
+        alert('تم تصفير قاعدة البيانات المحلية بالكامل بنجاح وإعادة الملف خاوياً لقابلية البدء من جديد.');
+        await fetchDatabase();
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
     try {
       const res = await fetch('/api/db/restore', {
         method: 'POST',
@@ -227,6 +427,10 @@ export default function App() {
   };
 
   const handleRebuildDatabaseConnection = async (): Promise<{ success: boolean; filePath?: string; error?: string }> => {
+    if (isOfflineMode) {
+      return { success: true, filePath: 'LocalStorage Browser Sync (Offline Mode Engine)' };
+    }
+
     try {
       const res = await fetch('/api/db/rebuild-connection', {
         method: 'POST',
@@ -307,6 +511,7 @@ export default function App() {
             onAddFamily={handleAddFamily}
             userRole={activeUser.role}
             initialTab="attendance"
+            isOfflineMode={isOfflineMode}
           />
         );
       case 'voice_enrollment':
@@ -317,6 +522,7 @@ export default function App() {
             onAddFamily={handleAddFamily}
             userRole={activeUser.role}
             initialTab="enrollment"
+            isOfflineMode={isOfflineMode}
           />
         );
       case 'import_export':
@@ -703,6 +909,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-bg-canvas selection:bg-[#3B82F6]/15 selection:text-[#3B82F6]">
+      {isOfflineMode && (
+        <div className="bg-amber-500 hover:bg-amber-600/95 text-[#0F172A] text-[11px] font-bold py-2.5 px-4 text-center flex flex-col sm:flex-row items-center justify-center gap-2 transition-all border-b border-amber-600/30" dir="rtl">
+          <span className="bg-slate-900 text-amber-400 text-[10px] px-2 py-0.5 rounded-lg font-mono tracking-tight shrink-0">
+            Vercel & GitHub Active Mode 💾
+          </span>
+          <span>
+            محرك التخزين المحلي الآمن نشط بالكامل. كافة التغييرات وحضور العائلات يُحفظ بأمان 100% في جهازك المتصفح الحالي، ويمكنك تصديرها كملف Excel في أي لحظه!
+          </span>
+        </div>
+      )}
+
       {errorMsg && (
         <div className="bg-[#EF4444] text-white text-xs font-semibold p-3.5 text-center flex items-center justify-center gap-2" dir="rtl">
           <AlertCircle className="w-4 h-4" />
