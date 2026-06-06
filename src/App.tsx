@@ -13,6 +13,19 @@ import FamilySection from './components/FamilySection';
 import VoiceRecognizer from './components/VoiceRecognizer';
 import ExcelManager from './components/ExcelManager';
 import SystemSettings from './components/SystemSettings';
+import { 
+  isFirebaseConfigured, 
+  fetchFamiliesFromFirebase, 
+  fetchAttendanceFromFirebase, 
+  fetchAuditLogsFromFirebase, 
+  fetchUsersFromFirebase,
+  saveFamilyToFirebase,
+  deleteFamilyFromFirebase,
+  saveAttendanceToFirebase,
+  saveAuditLogToFirebase,
+  saveUserToFirebase,
+  migrateLocalToFirebase
+} from './lib/firebaseSync';
 
 export default function App() {
   const [families, setFamilies] = useState<Family[]>([]);
@@ -42,6 +55,66 @@ export default function App() {
     try {
       setLoading(true);
       setErrorMsg(null);
+
+      // 1. If Firebase Cloud DB is configured, let's use it as our central database (meaning absolute global persistence!)
+      if (isFirebaseConfigured()) {
+        console.log('[Hybrid Database Engine] Loading from Live Firebase Cloud database...');
+        try {
+          let cloudFam = await fetchFamiliesFromFirebase();
+          let cloudAtt = await fetchAttendanceFromFirebase();
+          let cloudAud = await fetchAuditLogsFromFirebase();
+          const cloudUsr = await fetchUsersFromFirebase();
+
+          // If the Cloud Database is newly provisioned and completely empty, 
+          // we fetch the standard server templates (church_db.json) as seed data 
+          // so new devices don't show a completely empty layout on their first startup.
+          if (cloudFam.length === 0 && cloudAtt.length === 0) {
+            console.log('[Hybrid Database Engine] Cloud database resides empty. Fetching initial local backup seed.');
+            try {
+              const res = await fetch('/api/db');
+              if (res.ok) {
+                const contentType = res.headers.get('content-type');
+                if (contentType && !contentType.includes('text/html')) {
+                  const data = await res.json();
+                  cloudFam = data.families || [];
+                  cloudAtt = data.attendance || [];
+                  cloudAud = data.auditLogs || [];
+                }
+              }
+            } catch (seedErr) {
+              console.warn('[Hybrid Database Engine] Unhandled seed loading failure:', seedErr);
+            }
+          }
+
+          setFamilies(cloudFam);
+          setAttendance(cloudAtt);
+          setAuditLogs(cloudAud);
+          
+          const defaultUsers: ChurchUser[] = [
+            { email: 'wagdy.hafez@gmail.com', name: 'أ. وجدي حافظ', role: 'Super Admin' },
+            { email: 'servant1@church.org', name: 'خادم الاجتماع ۱', role: 'Admin' },
+            { email: 'viewer@church.org', name: 'مشاهد فقط', role: 'Viewer' }
+          ];
+          const finalUsers = cloudUsr.length > 0 ? cloudUsr : defaultUsers;
+          setUsers(finalUsers);
+          setIsOfflineMode(false);
+
+          // Always back up to local storage cache to support ultra-fast offline fallback
+          syncLocalDb(cloudFam, cloudAtt, cloudAud, finalUsers);
+
+          // Update activeUser session
+          const exists = finalUsers.find((u: ChurchUser) => u.email === activeUser.email);
+          if (exists) {
+            setActiveUser(exists);
+          }
+          setLoading(false);
+          return;
+        } catch (firebaseErr: any) {
+          console.warn('[Hybrid Database Engine] Firestore fetch failed. Falling back to local browser cache:', firebaseErr);
+        }
+      }
+
+      // 2. Normal / original local database fetching from /api/db or files
       const res = await fetch('/api/db');
       if (!res.ok) {
         throw new Error('فشل تحميل قاعدة البيانات من الخادم الحوسبي.');
@@ -138,7 +211,8 @@ export default function App() {
 
   // API operations
   const handleAddFamily = async (familyData: Omit<Family, 'id' | 'createdAt'>): Promise<boolean> => {
-    if (isOfflineMode) {
+    if (isFirebaseConfigured() || isOfflineMode) {
+      const isCloud = isFirebaseConfigured();
       const newFamily: Family = {
         ...familyData,
         id: `fam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -146,9 +220,22 @@ export default function App() {
       };
       const updatedFamilies = [newFamily, ...families];
       setFamilies(updatedFamilies);
-      const updatedLogs = addLocalAuditLog('إضافة عائلية (محلية)', `تم إضافة عائلة ${familyData.husbandName} في قاعدة البيانات المحلية (Vercel Offline Mode).`);
+      const logAction = isCloud ? 'إضافة عائلية (سحابية)' : 'إضافة عائلية (محلية)';
+      const logDetails = isCloud 
+        ? `تم إضافة عائلة ${familyData.husbandName} في قاعدة البيانات السحابية (Firestore).`
+        : `تم إضافة عائلة ${familyData.husbandName} في قاعدة البيانات المحلية (Vercel Offline Mode).`;
+      const updatedLogs = addLocalAuditLog(logAction, logDetails);
       syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
-      alert('تم إضافة عائلة كنسية بنجاح إلى قاعدة البيانات المحلية وتسجيل العملية في الأرشيف (Offline Mode).');
+
+      if (isCloud) {
+        try {
+          await saveFamilyToFirebase(newFamily);
+          await saveAuditLogToFirebase(updatedLogs[0]);
+        } catch (err) {
+          console.error('[FirebaseSync] Failed to save family to cloud:', err);
+        }
+      }
+      alert('تم إضافة عائلة كنسية بنجاح وتسجيل العملية في الأرشيف.');
       return true;
     }
 
@@ -180,7 +267,9 @@ export default function App() {
   };
 
   const handleEditFamily = async (id: string, familyData: Partial<Family>): Promise<boolean> => {
-    if (isOfflineMode) {
+    if (isFirebaseConfigured() || isOfflineMode) {
+      const isCloud = isFirebaseConfigured();
+      const targetFamily = families.find(f => f.id === id);
       const updatedFamilies = families.map(f => {
         if (f.id === id) {
           return { ...f, ...familyData };
@@ -188,9 +277,21 @@ export default function App() {
         return f;
       });
       setFamilies(updatedFamilies);
-      const targetFamily = families.find(f => f.id === id);
-      const updatedLogs = addLocalAuditLog('تحديث عائلية (محلية)', `تم تحديث بيانات العائلة ${targetFamily?.husbandName || ''} في قاعدة البيانات المحلية.`);
+      const logAction = isCloud ? 'تحديث عائلية (سحابية)' : 'تحديث عائلية (محلية)';
+      const logDetails = isCloud 
+        ? `تم تحديث بيانات العائلة ${targetFamily?.husbandName || ''} في قاعدة البيانات السحابية.`
+        : `تم تحديث بيانات العائلة ${targetFamily?.husbandName || ''} في قاعدة البيانات المحلية.`;
+      const updatedLogs = addLocalAuditLog(logAction, logDetails);
       syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
+
+      if (isCloud && targetFamily) {
+        try {
+          await saveFamilyToFirebase({ ...targetFamily, ...familyData });
+          await saveAuditLogToFirebase(updatedLogs[0]);
+        } catch (err) {
+          console.error('[FirebaseSync] Failed to update family on cloud:', err);
+        }
+      }
       return true;
     }
 
@@ -221,12 +322,26 @@ export default function App() {
   };
 
   const handleDeleteFamily = async (id: string): Promise<boolean> => {
-    if (isOfflineMode) {
+    if (isFirebaseConfigured() || isOfflineMode) {
+      const isCloud = isFirebaseConfigured();
       const targetFamily = families.find(f => f.id === id);
       const updatedFamilies = families.filter(f => f.id !== id);
       setFamilies(updatedFamilies);
-      const updatedLogs = addLocalAuditLog('حذف عائلية (محلية)', `تم حذف العائلة ${targetFamily?.husbandName || ''} من قاعدة البيانات المحلية.`);
+      const logAction = isCloud ? 'حذف عائلية (سحابية)' : 'حذف عائلية (محلية)';
+      const logDetails = isCloud 
+        ? `تم حذف العائلة ${targetFamily?.husbandName || ''} من قاعدة البيانات السحابية.`
+        : `تم حذف العائلة ${targetFamily?.husbandName || ''} من قاعدة البيانات المحلية.`;
+      const updatedLogs = addLocalAuditLog(logAction, logDetails);
       syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
+
+      if (isCloud) {
+        try {
+          await deleteFamilyFromFirebase(id);
+          await saveAuditLogToFirebase(updatedLogs[0]);
+        } catch (err) {
+          console.error('[FirebaseSync] Failed to delete family from cloud:', err);
+        }
+      }
       return true;
     }
 
@@ -251,39 +366,56 @@ export default function App() {
   };
 
   const handleAttendanceSaved = async (date: string, attendedFamilyIds: string[], notes: string, merge: boolean = false) => {
-    if (isOfflineMode) {
+    if (isFirebaseConfigured() || isOfflineMode) {
+      const isCloud = isFirebaseConfigured();
       let updatedAttendance = [...attendance];
       const existingIdx = updatedAttendance.findIndex(a => a.date === date);
+      let targetRecord: AttendanceRecord;
       
       if (existingIdx !== -1) {
         if (merge) {
           const mergedIds = Array.from(new Set([...updatedAttendance[existingIdx].attendedFamilyIds, ...attendedFamilyIds]));
-          updatedAttendance[existingIdx] = {
+          targetRecord = {
             ...updatedAttendance[existingIdx],
             attendedFamilyIds: mergedIds,
             notes: notes || updatedAttendance[existingIdx].notes
           };
+          updatedAttendance[existingIdx] = targetRecord;
         } else {
-          updatedAttendance[existingIdx] = {
+          targetRecord = {
             date,
             attendedFamilyIds,
             notes: notes || 'تحديث الحضور الكنسي',
             createdBy: updatedAttendance[existingIdx].createdBy || activeUser.name
           };
+          updatedAttendance[existingIdx] = targetRecord;
         }
       } else {
-        const newRecord: AttendanceRecord = {
+        targetRecord = {
           date,
           attendedFamilyIds,
           notes: notes || 'حضور لقاء عام',
           createdBy: activeUser.name
         };
-        updatedAttendance = [newRecord, ...updatedAttendance];
+        updatedAttendance = [targetRecord, ...updatedAttendance];
       }
       
       setAttendance(updatedAttendance);
-      const updatedLogs = addLocalAuditLog('تسجيل حضور (محلية)', `تم تسجيل حضور ${attendedFamilyIds.length} عائلات في لقاء تاريخ ${date}.`);
+      const logAction = isCloud ? 'تسجيل حضور (سحابية)' : 'تسجيل حضور (محلية)';
+      const logDetails = isCloud 
+        ? `تم تسجيل حضور ${attendedFamilyIds.length} عائلات سحابياً في لقاء تاريخ ${date}.`
+        : `تم تسجيل حضور ${attendedFamilyIds.length} عائلات محلياً في لقاء تاريخ ${date}.`;
+      const updatedLogs = addLocalAuditLog(logAction, logDetails);
       syncLocalDb(families, updatedAttendance, updatedLogs, users);
+
+      if (isCloud) {
+        try {
+          await saveAttendanceToFirebase(targetRecord);
+          await saveAuditLogToFirebase(updatedLogs[0]);
+        } catch (err) {
+          console.error('[FirebaseSync] Failed to save attendance to cloud:', err);
+        }
+      }
       return;
     }
 
@@ -310,7 +442,8 @@ export default function App() {
   };
 
   const handleImportCompleted = async (importedList: any[]) => {
-    if (isOfflineMode) {
+    if (isFirebaseConfigured() || isOfflineMode) {
+      const isCloud = isFirebaseConfigured();
       const mapped = importedList.map(fam => ({
         ...fam,
         id: fam.id || `fam_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
@@ -318,9 +451,24 @@ export default function App() {
       }));
       const updatedFamilies = [...mapped, ...families];
       setFamilies(updatedFamilies);
-      const updatedLogs = addLocalAuditLog('استيراد عائلات (محلية)', `تم استيراد وتحميل ${importedList.length} عائلات من كشف Excel.`);
+      const logAction = isCloud ? 'استيراد عائلات (سحابية)' : 'استيراد عائلات (محلية)';
+      const logDetails = isCloud 
+        ? `تم استيراد وتحميل ${importedList.length} عائلات سحابية من كشف Excel.`
+        : `تم استيراد وتحميل ${importedList.length} عائلات محلية من كشف Excel.`;
+      const updatedLogs = addLocalAuditLog(logAction, logDetails);
       syncLocalDb(updatedFamilies, attendance, updatedLogs, users);
-      alert('تم استيراد العائلات بنجاح إلى الذاكرة المحلية (Offline Mode).');
+
+      if (isCloud) {
+        try {
+          for (const fam of mapped) {
+            await saveFamilyToFirebase(fam);
+          }
+          await saveAuditLogToFirebase(updatedLogs[0]);
+        } catch (err) {
+          console.error('[FirebaseSync] Import cloud sync error:', err);
+        }
+      }
+      alert('تم استيراد العائلات بنجاح وتسجيل عملية الاستيراد في الأرشيف.');
       return;
     }
 
@@ -345,29 +493,51 @@ export default function App() {
   };
 
   const handleBulkAttendanceImport = async (records: { date: string; attendedFamilyIds: string[]; notes: string }[]) => {
-    if (isOfflineMode) {
+    if (isFirebaseConfigured() || isOfflineMode) {
+      const isCloud = isFirebaseConfigured();
       let updatedAttendance = [...attendance];
+      const recsToSave: AttendanceRecord[] = [];
+
       for (const rec of records) {
         const existingIdx = updatedAttendance.findIndex(a => a.date === rec.date);
+        let targetRec: AttendanceRecord;
         if (existingIdx !== -1) {
-          updatedAttendance[existingIdx] = {
+          targetRec = {
             ...updatedAttendance[existingIdx],
             attendedFamilyIds: Array.from(new Set([...updatedAttendance[existingIdx].attendedFamilyIds, ...rec.attendedFamilyIds])),
             notes: rec.notes || updatedAttendance[existingIdx].notes
           };
+          updatedAttendance[existingIdx] = targetRec;
         } else {
-          updatedAttendance = [{
+          targetRec = {
             date: rec.date,
             attendedFamilyIds: rec.attendedFamilyIds,
             notes: rec.notes,
             createdBy: activeUser.name
-          }, ...updatedAttendance];
+          };
+          updatedAttendance = [targetRec, ...updatedAttendance];
         }
+        recsToSave.push(targetRec);
       }
       setAttendance(updatedAttendance);
-      const updatedLogs = addLocalAuditLog('استيراد حضور بالجملة (محلية)', `تم استيراد حضور لعدد ${records.length} لقاءات.`);
+      const logAction = isCloud ? 'استيراد حضور بالجملة (سحابية)' : 'استيراد حضور بالجملة (محلية)';
+      const logDetails = isCloud 
+        ? `تم استيراد حضور سحابي لعدد ${records.length} لقاءات.`
+        : `تم استيراد حضور محلي لعدد ${records.length} لقاءات.`;
+      const updatedLogs = addLocalAuditLog(logAction, logDetails);
       syncLocalDb(families, updatedAttendance, updatedLogs, users);
-      alert('تم دمج واستيراد كشوف الحضور الكنسي بنجاح بمحرك التخزين المحلي المحاكي.');
+
+      if (isCloud) {
+        try {
+          for (const r of recsToSave) {
+            await saveAttendanceToFirebase(r);
+          }
+          await saveAuditLogToFirebase(updatedLogs[0]);
+        } catch (err) {
+          console.error('[FirebaseSync] Bulk attendance cloud error:', err);
+        }
+      }
+      alert('تم دمج واستيراد كشوف الحضور الكنسي بنجاح.');
       return;
     }
 
@@ -389,6 +559,40 @@ export default function App() {
     } catch (err) {
       console.error(err);
       alert('حدث خطأ في عملية استيراد سجل حضور الاجتماعات.');
+    }
+  };
+
+  const handleSaveFirebaseConfigText = async (configText: string): Promise<boolean> => {
+    if (!configText || configText.trim() === '') {
+      localStorage.removeItem('church_firebase_config_custom');
+      await fetchDatabase();
+      return true;
+    }
+    try {
+      const parsed = JSON.parse(configText.trim());
+      if (!parsed.apiKey || !parsed.projectId || !parsed.appId) {
+        throw new Error('يجب احتواء كود التكوين المنسوخ على apiKey و projectId و appId.');
+      }
+      localStorage.setItem('church_firebase_config_custom', JSON.stringify(parsed));
+      // Reload database immediately using new Firebase connection
+      await fetchDatabase();
+      return true;
+    } catch (err: any) {
+      console.error('Save Firebase Config Failed', err);
+      return false;
+    }
+  };
+
+  const handleMigrateToFirebase = async (): Promise<{ success: boolean; count: number; error?: string }> => {
+    try {
+      const result = await migrateLocalToFirebase(families, attendance, auditLogs, users);
+      if (result.success) {
+        // Reload database using live cloud firebase contents to make sure everything is clean
+        await fetchDatabase();
+      }
+      return result;
+    } catch (e: any) {
+      return { success: false, count: 0, error: e.message || 'Migration runtime exception.' };
     }
   };
 
@@ -653,6 +857,9 @@ export default function App() {
             onRestoreDatabase={handleRestoreDatabase}
             onRebuildDatabaseConnection={handleRebuildDatabaseConnection}
             userRole={activeUser.role}
+            isFirebaseActive={isFirebaseConfigured()}
+            onSaveFirebaseConfig={handleSaveFirebaseConfigText}
+            onMigrateToFirebase={handleMigrateToFirebase}
           />
         );
       default:

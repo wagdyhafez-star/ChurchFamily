@@ -17,6 +17,9 @@ interface SystemSettingsProps {
   onRestoreDatabase: () => Promise<void>;
   onRebuildDatabaseConnection: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
   userRole: string;
+  isFirebaseActive: boolean;
+  onSaveFirebaseConfig: (configText: string) => Promise<boolean>;
+  onMigrateToFirebase: () => Promise<{ success: boolean; count: number; error?: string }>;
 }
 
 export default function SystemSettings({
@@ -26,7 +29,10 @@ export default function SystemSettings({
   onSelectUser,
   onRestoreDatabase,
   onRebuildDatabaseConnection,
-  userRole
+  userRole,
+  isFirebaseActive,
+  onSaveFirebaseConfig,
+  onMigrateToFirebase
 }: SystemSettingsProps) {
   const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'docs' | 'db'>('users');
   const [restoring, setRestoring] = useState(false);
@@ -35,6 +41,46 @@ export default function SystemSettings({
   
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildFeedback, setRebuildFeedback] = useState<{ success: boolean; filePath?: string; error?: string } | null>(null);
+
+  const [customConfigInput, setCustomConfigInput] = useState(() => localStorage.getItem('church_firebase_config_custom') || '');
+  const [savingFirebase, setSavingFirebase] = useState(false);
+  const [firebaseSaveFeedback, setFirebaseSaveFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+
+  const [migratingFirebase, setMigratingFirebase] = useState(false);
+  const [firebaseMigrateFeedback, setFirebaseMigrateFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+
+  const handleSaveFirebaseConfigText = async () => {
+    setSavingFirebase(true);
+    setFirebaseSaveFeedback(null);
+    try {
+      const res = await onSaveFirebaseConfig(customConfigInput);
+      if (res) {
+        setFirebaseSaveFeedback({ success: true, msg: 'تم تخزين والاتصال بـ Firestore بنجاح! يتم الآن توجيه كافة التحديثات إلى خادمك السحابي.' });
+      } else {
+        setFirebaseSaveFeedback({ success: false, msg: 'صيغة الـ JSON غير مقبولة أو ناقصة. يرجى مراجعة الحقول الأساسية وتجربة مرة أخرى.' });
+      }
+    } catch (e: any) {
+      setFirebaseSaveFeedback({ success: false, msg: e.message || 'فشلت عملية حفظ التكوين.' });
+    }
+    setSavingFirebase(false);
+  };
+
+  const handleMigrateLocalToCloud = async () => {
+    if (!window.confirm('هل أنت متأكد من رغبتك في رفع كافة بيانات الأسر وجداول الحضور الحالية من جهازك إلى قاعدة بيانات Firestore السحابية؟ سينقذ هذا كافة البيانات المدخلة لتظهر لجميع الخدام الآخرين فوراً.')) return;
+    setMigratingFirebase(true);
+    setFirebaseMigrateFeedback(null);
+    try {
+      const result = await onMigrateToFirebase();
+      if (result.success) {
+        setFirebaseMigrateFeedback({ success: true, msg: `تم رفع ونقل ${result.count} سجل وبطاقة عائلية بنجاح إلى قاعدة البيانات السحابية الحية! 🏆` });
+      } else {
+        setFirebaseMigrateFeedback({ success: false, msg: `فشل الرفع: ${result.error}` });
+      }
+    } catch (e: any) {
+      setFirebaseMigrateFeedback({ success: false, msg: e.message || 'حدث خطأ غير متوقع أثناء المزامنة الرافعة.' });
+    }
+    setMigratingFirebase(false);
+  };
 
   const handleRebuildConnection = async () => {
     setRebuilding(true);
@@ -230,7 +276,128 @@ export default function SystemSettings({
         {activeTab === 'db' && (
           <div className="space-y-6">
             <h3 className="text-sm font-bold text-stone-905">أدوات استرداد الكوارث والطوارئ وحوكمة البيانات</h3>
-            
+
+            {/* Firebase Cloud Sync Control Center */}
+            <div className="p-5 bg-gradient-to-br from-stone-50 to-stone-100/40 border border-stone-200 rounded-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-stone-200/60 pb-4">
+                <div>
+                  <h4 className="font-bold text-stone-900 text-sm flex items-center gap-1.5">
+                    <span className="flex h-2.5 w-2.5 relative">
+                      {isFirebaseActive ? (
+                        <>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-450 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-550"></span>
+                        </>
+                      ) : (
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                      )}
+                    </span>
+                    بوابة المزامنة السحابية المباشرة (Cloud Firestore Sync Engine)
+                  </h4>
+                  <p className="text-xs text-stone-550 mt-1">تتيح مشاركة الحضور وقائمة الأسر بين كافة أجهزة الخدام اللحظية وهواتفهم بالتزامن 100%.</p>
+                </div>
+                <div className="shrink-0">
+                  {isFirebaseActive ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-250">
+                      🟢 السحاب نشط (Cloud Synced)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-850 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">
+                      🟡 التخزين المحلي الآمن نشط (LocalStorage Engine)
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-1">
+                {/* Save and Verify Firebase Config */}
+                <div className="space-y-3">
+                  <label className="block text-xs font-bold text-stone-700">لصق كود تكوين الويب لـ Firebase (Web Configuration JSON):</label>
+                  <p className="text-[10px] text-stone-500 leading-normal">
+                    يمكنك إنشاء مشروع Firebase مجاني في دقيقة، ونسخ كود الويب (firebaseConfig) الخاص بك من إعدادات المشروع ولصقه هنا لربط التطبيق بسحابك الخاص مباشرة:
+                  </p>
+                  <textarea
+                    dir="ltr"
+                    rows={5}
+                    className="w-full text-xs font-mono p-3 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-stone-400 bg-white"
+                    placeholder={`{\n  "apiKey": "AIzaSy...",\n  "authDomain": "my-church-db.firebaseapp.com",\n  "projectId": "my-church-db",\n  "storageBucket": "my-church-db.appspot.com",\n  "messagingSenderId": "...",\n  "appId": "..."\n}`}
+                    value={customConfigInput}
+                    onChange={(e) => setCustomConfigInput(e.target.value)}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={savingFirebase}
+                      onClick={handleSaveFirebaseConfigText}
+                      className="bg-stone-900 hover:bg-stone-850 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      {savingFirebase ? 'جاري التحقق...' : 'حفظ وتفعيل المزامنة السحابية ☁️'}
+                    </button>
+                    {customConfigInput && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm('هل تود حذف إعدادات التكوين السحابية والرجوع للوضع المحلي القياسي؟')) {
+                            localStorage.removeItem('church_firebase_config_custom');
+                            setCustomConfigInput('');
+                            window.location.reload();
+                          }
+                        }}
+                        className="text-stone-500 hover:text-red-600 text-xs font-semibold py-2 px-3 transition-colors"
+                      >
+                        إلغاء التهيئة والرجوع محلياً
+                      </button>
+                    )}
+                  </div>
+                  {firebaseSaveFeedback && (
+                    <div className={`p-3 rounded-xl text-xs font-bold leading-relaxed border ${
+                      firebaseSaveFeedback.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-850'
+                    }`}>
+                      {firebaseSaveFeedback.msg}
+                    </div>
+                  )}
+                </div>
+
+                {/* Local to Cloud Sync Migration */}
+                <div className="space-y-4 bg-white/50 border border-stone-200 p-4 rounded-xl flex flex-col justify-between">
+                  <div className="space-y-2">
+                    <h5 className="text-xs font-bold text-stone-800 flex items-center gap-1.5">
+                      <Layers className="w-4 h-4 text-amber-600" />
+                      رفع ودمج البيانات المحلية مع السحاب (Push Local Database Setup)
+                    </h5>
+                    <p className="text-xs text-stone-605 leading-relaxed font-semibold">
+                      إذا قمت بإضافة عائلات أو تسجيل حضور على هذا الجهاز وتريد نقلها لترتفع في السحاب فورا وتظهر لكافة الخدام الآخرين على كافة الهواتف، اضغط على زر الرفع أدناه.
+                    </p>
+                    <div className="p-3 bg-amber-50 border border-amber-150 rounded-lg text-[11px] font-bold text-amber-850 leading-relaxed">
+                      💡 نصيحة: بمجرد تفعيل السحاب لأول مرة، قم بالضغط على الترحيل مرة واحدة لتصبح السحابة مطابقة لما هو مخزن محلياً بجهازك.
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      disabled={!isFirebaseActive || migratingFirebase}
+                      onClick={handleMigrateLocalToCloud}
+                      className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors cursor-pointer"
+                    >
+                      {migratingFirebase ? 'جاري تصدير ومزامنة البيانات لـ Firestore السحابي...' : 'رفع كافة البيانات والماكيت لـ Firestore السحابي 🚀'}
+                    </button>
+                    {!isFirebaseActive && (
+                      <span className="text-[10px] text-stone-400 font-bold block text-center">يرجى حفظ كود التكوين السحابي (أعلى اليمين) أولاً لتفعيل الرفع.</span>
+                    )}
+
+                    {firebaseMigrateFeedback && (
+                      <div className={`p-3 rounded-xl text-xs font-bold leading-relaxed border ${
+                        firebaseMigrateFeedback.success ? 'bg-emerald-50 border border-emerald-250 text-emerald-800' : 'bg-red-50 border border-red-200 text-red-800'
+                      }`}>
+                        {firebaseMigrateFeedback.msg}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {/* Card 1: Copy Backup */}
               <div className="border border-stone-200 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
