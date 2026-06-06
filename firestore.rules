@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all rule as safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // 1. Families Collection Rules
+    match /families/{familyId} {
+      allow read: if true;
+      allow create, update: if isValidId(familyId) && 
+        incoming().husbandName is string && incoming().husbandName.size() <= 200 &&
+        incoming().wifeName is string && incoming().wifeName.size() <= 200 &&
+        incoming().husbandPhone is string && incoming().wifePhone is string;
+      allow delete: if true;
+    }
+
+    // 2. Attendance Records Rules
+    match /attendance/{dateId} {
+      allow read: if true;
+      allow create, update: if dateId is string && dateId.size() <= 50 &&
+        incoming().date == dateId &&
+        incoming().attendedFamilyIds is list &&
+        incoming().createdBy is string;
+      allow delete: if true;
+    }
+
+    // 3. Security Audit Logs Rules
+    match /auditLogs/{logId} {
+      allow read: if true;
+      allow create, update: if isValidId(logId) &&
+        incoming().id == logId &&
+        incoming().timestamp is string &&
+        incoming().userEmail is string;
+      allow delete: if true;
+    }
+
+    // 4. Authorized Operator Users Rules
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if userId is string && userId.size() <= 128 &&
+        incoming().email is string &&
+        incoming().name is string &&
+        incoming().role is string;
+      allow delete: if true;
+    }
+  }
+}

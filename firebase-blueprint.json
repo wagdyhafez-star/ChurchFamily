@@ -1,0 +1,174 @@
+{
+  "entities": {
+    "Child": {
+      "title": "Child",
+      "description": "Information about a child of a family",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique child identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Arabic child name"
+        },
+        "age": {
+          "type": "number",
+          "description": "Age of the child"
+        },
+        "birthDate": {
+          "type": "string",
+          "description": "ISO date YYYY-MM-DD"
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["ذكر", "أنثى", ""]
+        }
+      },
+      "required": ["id", "name", "age"]
+    },
+    "Family": {
+      "title": "Family",
+      "description": "Core entity containing the church family details",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique family document ID"
+        },
+        "husbandName": {
+          "type": "string",
+          "description": "Arabic husband's display name"
+        },
+        "wifeName": {
+          "type": "string",
+          "description": "Arabic wife's display name"
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Base64 or external url family portrait path"
+        },
+        "husbandPhone": {
+          "type": "string"
+        },
+        "wifePhone": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "marriageDate": {
+          "type": "string"
+        },
+        "husbandBirthDate": {
+          "type": "string"
+        },
+        "wifeBirthDate": {
+          "type": "string"
+        },
+        "husbandJob": {
+          "type": "string"
+        },
+        "wifeJob": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "description": "Underlying children entities"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "husbandName", "wifeName", "husbandPhone", "wifePhone", "address", "marriageDate", "createdAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Tracks meeting attendance for church families",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "Date of meeting YYYY-MM-DD"
+        },
+        "attendedFamilyIds": {
+          "type": "array",
+          "description": "List of family IDs in attendance"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        }
+      },
+      "required": ["date", "attendedFamilyIds", "createdBy"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Security audit trails of user modifications",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "userEmail": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "details": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "timestamp", "userEmail", "role", "action", "details"]
+    },
+    "ChurchUser": {
+      "title": "ChurchUser",
+      "description": "User profile with authorization roles",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["Super Admin", "Admin", "Viewer"]
+        }
+      },
+      "required": ["email", "name", "role"]
+    }
+  },
+  "firestore": {
+    "families": {
+      "schema": "Family",
+      "description": "Central registry of registered families"
+    },
+    "attendance": {
+      "schema": "AttendanceRecord",
+      "description": "Meeting-by-meeting attendance lists"
+    },
+    "auditLogs": {
+      "schema": "AuditLog",
+      "description": "Logs tracking security and database writes"
+    },
+    "users": {
+      "schema": "ChurchUser",
+      "description": "System operators list"
+    }
+  }
+}

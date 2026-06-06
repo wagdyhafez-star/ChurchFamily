@@ -13,6 +13,7 @@ import {
   limit
 } from 'firebase/firestore';
 import { Family, AttendanceRecord, AuditLog, ChurchUser } from '../types';
+import { safeLocalStorage } from './safeStorage';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -129,7 +130,7 @@ export const getFirebaseConfig = (): FirebaseConfig | null => {
   }
 
   // Option 4: User custom configuration entered on the UI
-  const customConfigStr = localStorage.getItem('church_firebase_config_custom');
+  const customConfigStr = safeLocalStorage.getItem('church_firebase_config_custom');
   if (customConfigStr) {
     try {
       return JSON.parse(customConfigStr);

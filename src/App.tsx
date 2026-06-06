@@ -8,6 +8,7 @@ import {
   Users, Calendar, FileSpreadsheet, Mic, Shield, Layout, Smartphone, Eye, CheckCircle2, History, AlertCircle, Sparkles, LogOut, Clock, ArrowRight, CornerDownLeft, QrCode, Scan, UserPlus
 } from 'lucide-react';
 import { Family, AttendanceRecord, AuditLog, ChurchUser } from './types';
+import { safeLocalStorage } from './lib/safeStorage';
 import DashboardView from './components/DashboardView';
 import FamilySection from './components/FamilySection';
 import VoiceRecognizer from './components/VoiceRecognizer';
@@ -50,6 +51,23 @@ export default function App() {
   const [qrCheckingIn, setQrCheckingIn] = useState(false);
   const [qrFeedback, setQrFeedback] = useState<string | null>(null);
 
+  // Helper to fetch with an enforced timeout using AbortController
+  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs: number = 4000): Promise<Response> => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(id);
+      return response;
+    } catch (error: any) {
+      clearTimeout(id);
+      if (error.name === 'AbortError') {
+        throw new Error('فشل الاتصال: انتهت مهلة طلب البيانات (4 ثوانٍ)');
+      }
+      throw error;
+    }
+  };
+
   // Load the initial database records
   const fetchDatabase = async () => {
     try {
@@ -71,7 +89,7 @@ export default function App() {
           if (cloudFam.length === 0 && cloudAtt.length === 0) {
             console.log('[Hybrid Database Engine] Cloud database resides empty. Fetching initial local backup seed.');
             try {
-              const res = await fetch('/api/db');
+              const res = await fetchWithTimeout('/api/db');
               if (res.ok) {
                 const contentType = res.headers.get('content-type');
                 if (contentType && !contentType.includes('text/html')) {
@@ -115,7 +133,7 @@ export default function App() {
       }
 
       // 2. Normal / original local database fetching from /api/db or files
-      const res = await fetch('/api/db');
+      const res = await fetchWithTimeout('/api/db');
       if (!res.ok) {
         throw new Error('فشل تحميل قاعدة البيانات من الخادم الحوسبي.');
       }
@@ -134,10 +152,10 @@ export default function App() {
 
       // Persist in background localStorage as fallback cache
       try {
-        localStorage.setItem('church_families', JSON.stringify(data.families || []));
-        localStorage.setItem('church_attendance', JSON.stringify(data.attendance || []));
-        localStorage.setItem('church_auditLogs', JSON.stringify(data.auditLogs || []));
-        localStorage.setItem('church_users', JSON.stringify(data.users || []));
+        safeLocalStorage.setItem('church_families', JSON.stringify(data.families || []));
+        safeLocalStorage.setItem('church_attendance', JSON.stringify(data.attendance || []));
+        safeLocalStorage.setItem('church_auditLogs', JSON.stringify(data.auditLogs || []));
+        safeLocalStorage.setItem('church_users', JSON.stringify(data.users || []));
       } catch (err) {
         console.warn('Unable to back up to local storage cache', err);
       }
@@ -152,10 +170,10 @@ export default function App() {
       setIsOfflineMode(true);
       
       try {
-        const localFamilies = localStorage.getItem('church_families');
-        const localAttendance = localStorage.getItem('church_attendance');
-        const localAuditLogs = localStorage.getItem('church_auditLogs');
-        const localUsers = localStorage.getItem('church_users');
+        const localFamilies = safeLocalStorage.getItem('church_families');
+        const localAttendance = safeLocalStorage.getItem('church_attendance');
+        const localAuditLogs = safeLocalStorage.getItem('church_auditLogs');
+        const localUsers = safeLocalStorage.getItem('church_users');
 
         const loadedFam = localFamilies ? JSON.parse(localFamilies) : [];
         const loadedAtt = localAttendance ? JSON.parse(localAttendance) : [];
@@ -186,10 +204,10 @@ export default function App() {
   // Helper to persist localStorage fallback
   const syncLocalDb = (newFamilies: Family[], newAttendance: AttendanceRecord[], newLogs: AuditLog[], newUsers: ChurchUser[]) => {
     try {
-      localStorage.setItem('church_families', JSON.stringify(newFamilies));
-      localStorage.setItem('church_attendance', JSON.stringify(newAttendance));
-      localStorage.setItem('church_auditLogs', JSON.stringify(newLogs));
-      localStorage.setItem('church_users', JSON.stringify(newUsers));
+      safeLocalStorage.setItem('church_families', JSON.stringify(newFamilies));
+      safeLocalStorage.setItem('church_attendance', JSON.stringify(newAttendance));
+      safeLocalStorage.setItem('church_auditLogs', JSON.stringify(newLogs));
+      safeLocalStorage.setItem('church_users', JSON.stringify(newUsers));
     } catch (err) {
       console.error('LocalStorage write failure', err);
     }
@@ -564,7 +582,7 @@ export default function App() {
 
   const handleSaveFirebaseConfigText = async (configText: string): Promise<boolean> => {
     if (!configText || configText.trim() === '') {
-      localStorage.removeItem('church_firebase_config_custom');
+      safeLocalStorage.removeItem('church_firebase_config_custom');
       await fetchDatabase();
       return true;
     }
@@ -573,7 +591,7 @@ export default function App() {
       if (!parsed.apiKey || !parsed.projectId || !parsed.appId) {
         throw new Error('يجب احتواء كود التكوين المنسوخ على apiKey و projectId و appId.');
       }
-      localStorage.setItem('church_firebase_config_custom', JSON.stringify(parsed));
+      safeLocalStorage.setItem('church_firebase_config_custom', JSON.stringify(parsed));
       // Reload database immediately using new Firebase connection
       await fetchDatabase();
       return true;
@@ -599,10 +617,10 @@ export default function App() {
   const handleRestoreDatabase = async () => {
     if (isOfflineMode) {
       try {
-        localStorage.removeItem('church_families');
-        localStorage.removeItem('church_attendance');
-        localStorage.removeItem('church_auditLogs');
-        localStorage.removeItem('church_users');
+        safeLocalStorage.removeItem('church_families');
+        safeLocalStorage.removeItem('church_attendance');
+        safeLocalStorage.removeItem('church_auditLogs');
+        safeLocalStorage.removeItem('church_users');
         setFamilies([]);
         setAttendance([]);
         setAuditLogs([]);
