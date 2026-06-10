@@ -330,17 +330,19 @@ app.post('/api/attendance/voice', async (req, res) => {
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: mimeType || 'audio/webm',
-            data: audioBase64
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType || 'audio/webm',
+              data: audioBase64
+            }
+          },
+          {
+            text: promptText
           }
-        },
-        {
-          text: promptText
-        }
-      ],
+        ]
+      },
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
@@ -431,17 +433,19 @@ app.post('/api/family/voice', async (req, res) => {
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: mimeType || 'audio/webm',
-            data: audioBase64
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType || 'audio/webm',
+              data: audioBase64
+            }
+          },
+          {
+            text: promptText
           }
-        },
-        {
-          text: promptText
-        }
-      ],
+        ]
+      },
       config: {
         responseMimeType: 'application/json',
         responseSchema: {

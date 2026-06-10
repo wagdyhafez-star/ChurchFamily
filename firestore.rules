@@ -16,43 +16,79 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // STANDALONE VALIDATION BLUEPRINTS
+    function isValidFamily(data) {
+      return data.husbandName is string && data.husbandName.size() <= 200 &&
+             data.wifeName is string && data.wifeName.size() <= 200 &&
+             (!('husbandPhone' in data) || (data.husbandPhone is string && data.husbandPhone.size() <= 100)) &&
+             (!('wifePhone' in data) || (data.wifePhone is string && data.wifePhone.size() <= 100)) &&
+             (!('address' in data) || (data.address is string && data.address.size() <= 500)) &&
+             (!('marriageDate' in data) || (data.marriageDate is string && data.marriageDate.size() <= 100)) &&
+             (!('husbandJob' in data) || (data.husbandJob is string && data.husbandJob.size() <= 200)) &&
+             (!('wifeJob' in data) || (data.wifeJob is string && data.wifeJob.size() <= 200)) &&
+             (!('husbandBirthDate' in data) || (data.husbandBirthDate is string && data.husbandBirthDate.size() <= 100)) &&
+             (!('wifeBirthDate' in data) || (data.wifeBirthDate is string && data.wifeBirthDate.size() <= 100)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 5000)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 10000000)) &&
+             (!('children' in data) || data.children is list) &&
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 100));
+    }
+
+    function isValidAttendance(data) {
+      return data.date is string && data.date.size() <= 50 &&
+             data.attendedFamilyIds is list &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 5000)) &&
+             data.createdBy is string && data.createdBy.size() <= 100;
+    }
+
+    function isValidAuditLog(data) {
+      return data.id is string && data.id.size() <= 100 &&
+             data.timestamp is string && data.timestamp.size() <= 100 &&
+             data.userEmail is string && data.userEmail.size() <= 100 &&
+             data.role is string && (data.role == 'Super Admin' || data.role == 'Admin' || data.role == 'Viewer') &&
+             data.action is string && data.action.size() <= 200 &&
+             data.details is string && data.details.size() <= 5000;
+    }
+
+    function isValidUser(data) {
+      return data.email is string && data.email.size() <= 100 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.role is string && (data.role == 'Super Admin' || data.role == 'Admin' || data.role == 'Viewer');
+    }
+
     // 1. Families Collection Rules
     match /families/{familyId} {
       allow read: if true;
-      allow create, update: if isValidId(familyId) && 
-        incoming().husbandName is string && incoming().husbandName.size() <= 200 &&
-        incoming().wifeName is string && incoming().wifeName.size() <= 200 &&
-        incoming().husbandPhone is string && incoming().wifePhone is string;
+      allow create, update: if isValidId(familyId) && isValidFamily(incoming());
       allow delete: if true;
     }
 
     // 2. Attendance Records Rules
     match /attendance/{dateId} {
       allow read: if true;
-      allow create, update: if dateId is string && dateId.size() <= 50 &&
-        incoming().date == dateId &&
-        incoming().attendedFamilyIds is list &&
-        incoming().createdBy is string;
+      allow create, update: if isValidAttendance(incoming());
       allow delete: if true;
     }
 
     // 3. Security Audit Logs Rules
     match /auditLogs/{logId} {
       allow read: if true;
-      allow create, update: if isValidId(logId) &&
-        incoming().id == logId &&
-        incoming().timestamp is string &&
-        incoming().userEmail is string;
-      allow delete: if true;
+      allow create: if isValidId(logId) && isValidAuditLog(incoming());
+      allow update, delete: if true;
     }
 
     // 4. Authorized Operator Users Rules
     match /users/{userId} {
       allow read: if true;
-      allow create, update: if userId is string && userId.size() <= 128 &&
-        incoming().email is string &&
-        incoming().name is string &&
-        incoming().role is string;
+      allow create, update: if isValidUser(incoming());
       allow delete: if true;
     }
   }
