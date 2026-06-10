@@ -134,7 +134,22 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
       audioChunksRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      let chosenMime = 'audio/webm';
+      let options = {};
+      if (typeof MediaRecorder.isTypeSupported === 'function') {
+        if (MediaRecorder.isTypeSupported('audio/webm')) {
+          options = { mimeType: 'audio/webm' };
+          chosenMime = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          options = { mimeType: 'audio/mp4' };
+          chosenMime = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+          options = { mimeType: 'audio/ogg' };
+          chosenMime = 'audio/ogg';
+        }
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -144,7 +159,7 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const blob = new Blob(audioChunksRef.current, { type: chosenMime });
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
         // Stop all tracks to clear microphone permissions light

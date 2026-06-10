@@ -262,13 +262,32 @@ export const fetchUsersFromFirebase = async (): Promise<ChurchUser[]> => {
 };
 
 // Saves a single family
+export function cleanObjectForFirestore(obj: any): any {
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(cleanObjectForFirestore);
+  }
+  if (typeof obj === 'object') {
+    const cleaned: any = {};
+    for (const key of Object.keys(obj)) {
+      if (key === 'isDuplicate') continue; // Skip UI flags used in ExcelManager
+      if (obj[key] !== undefined) {
+        cleaned[key] = cleanObjectForFirestore(obj[key]);
+      }
+    }
+    return cleaned;
+  }
+  return obj;
+}
+
 export const saveFamilyToFirebase = async (family: Family): Promise<void> => {
   const db = getFirestoreDb();
   if (!db) return;
   const path = `families/${family.id}`;
   try {
     const docRef = doc(db, 'families', family.id);
-    await withTimeout(setDoc(docRef, family));
+    const cleaned = cleanObjectForFirestore(family);
+    await withTimeout(setDoc(docRef, cleaned));
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -292,9 +311,9 @@ export const saveAttendanceToFirebase = async (record: AttendanceRecord): Promis
   if (!db) return;
   const path = `attendance/${record.date}`;
   try {
-    // We use date as the document key to enforce uniqueness per day and avoid duplicate entries
     const docRef = doc(db, 'attendance', record.date);
-    await withTimeout(setDoc(docRef, record));
+    const cleaned = cleanObjectForFirestore(record);
+    await withTimeout(setDoc(docRef, cleaned));
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -307,7 +326,8 @@ export const saveAuditLogToFirebase = async (log: AuditLog): Promise<void> => {
   const path = `auditLogs/${log.id}`;
   try {
     const docRef = doc(db, 'auditLogs', log.id);
-    await withTimeout(setDoc(docRef, log));
+    const cleaned = cleanObjectForFirestore(log);
+    await withTimeout(setDoc(docRef, cleaned));
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -321,7 +341,8 @@ export const saveUserToFirebase = async (user: ChurchUser): Promise<void> => {
   const path = `users/${safeEmailKey}`;
   try {
     const docRef = doc(db, 'users', safeEmailKey);
-    await withTimeout(setDoc(docRef, user));
+    const cleaned = cleanObjectForFirestore(user);
+    await withTimeout(setDoc(docRef, cleaned));
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

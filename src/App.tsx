@@ -478,9 +478,18 @@ export default function App() {
 
       if (isCloud) {
         try {
+          let successCount = 0;
+          let failCount = 0;
           for (const fam of mapped) {
-            await saveFamilyToFirebase(fam);
+            try {
+              await saveFamilyToFirebase(fam);
+              successCount++;
+            } catch (err) {
+              console.error(`[FirebaseSync] Failed to upload family to Firestore: ${fam.husbandName}`, err);
+              failCount++;
+            }
           }
+          console.log(`[FirebaseSync] Bulk cloud sync completed: ${successCount} successfully saved, ${failCount} failed.`);
           await saveAuditLogToFirebase(updatedLogs[0]);
         } catch (err) {
           console.error('[FirebaseSync] Import cloud sync error:', err);
