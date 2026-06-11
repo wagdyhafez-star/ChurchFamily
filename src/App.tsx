@@ -769,6 +769,7 @@ export default function App() {
         return (
           <VoiceRecognizer 
             families={families} 
+            attendance={attendance}
             onAttendanceSaved={handleAttendanceSaved}
             onAddFamily={handleAddFamily}
             userRole={activeUser!.role}
@@ -780,6 +781,7 @@ export default function App() {
         return (
           <VoiceRecognizer 
             families={families} 
+            attendance={attendance}
             onAttendanceSaved={handleAttendanceSaved}
             onAddFamily={handleAddFamily}
             userRole={activeUser!.role}

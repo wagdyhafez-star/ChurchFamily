@@ -8,10 +8,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Mic, Square, Upload, Sparkles, Check, RefreshCw, X, Play, AlertCircle, HelpCircle, FileAudio, ChevronDown, CheckSquare, PlusCircle, Trash2, Calendar, Phone, MapPin, UserPlus, Users
 } from 'lucide-react';
-import { Family } from '../types';
+import { Family, AttendanceRecord } from '../types';
 
 interface VoiceRecognizerProps {
   families: Family[];
+  attendance?: AttendanceRecord[];
   onAttendanceSaved: (date: string, attendedFamilyIds: string[], notes: string, mergeFlag?: boolean) => void;
   onAddFamily?: (familyData: Omit<Family, 'id' | 'createdAt'>) => Promise<boolean>;
   userRole: string;
@@ -49,7 +50,7 @@ const ENROLL_SPEECH_MOCKS = [
   }
 ];
 
-export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFamily, userRole, initialTab = 'attendance', isOfflineMode = false }: VoiceRecognizerProps) {
+export default function VoiceRecognizer({ families, attendance = [], onAttendanceSaved, onAddFamily, userRole, initialTab = 'attendance', isOfflineMode = false }: VoiceRecognizerProps) {
   const [activeTab, setActiveTab] = useState<'attendance' | 'enrollment'>(initialTab);
 
   useEffect(() => {
@@ -75,16 +76,64 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
   const [transcript, setTranscript] = useState<string>('');
   const [candidates, setCandidates] = useState<any[]>([]);
   
-  // Simulation/Manual input state
-  const [useSimulation, setUseSimulation] = useState(true);
+  // Input modes: 'simulation' | 'live' | 'manual'
+  const [inputMode, setInputMode] = useState<'simulation' | 'live' | 'manual'>('manual');
+  const useSimulation = inputMode === 'simulation';
   const [simulatedText, setSimulatedText] = useState(PRESET_SPEECH_MOCKS[0].text);
   const [showSimulateDropdown, setShowSimulateDropdown] = useState(false);
+
+  // Manual interactive mode states
+  const [manualSelectedFamilyIds, setManualSelectedFamilyIds] = useState<string[]>([]);
+  const [manualSearchQuery, setManualSearchQuery] = useState<string>('');
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+
+  // Synchronize manual selected list with existing db attendance when date changes
+  useEffect(() => {
+    if (attendance && attendance.length > 0) {
+      const existingRecord = attendance.find(rec => rec.date === meetingDate);
+      if (existingRecord) {
+        setManualSelectedFamilyIds(existingRecord.attendedFamilyIds || []);
+        setNotes(existingRecord.notes || '');
+      } else {
+        setManualSelectedFamilyIds([]);
+        setNotes('');
+      }
+    } else {
+      setManualSelectedFamilyIds([]);
+      setNotes('');
+    }
+    setSaveSuccessMsg(null);
+  }, [meetingDate, attendance]);
+
+  // Handle toggling of a family's attendance in manual list
+  const handleToggleManualFamily = (familyId: string) => {
+    if (userRole === 'Viewer') return;
+    setManualSelectedFamilyIds((prev) => 
+      prev.includes(familyId) 
+        ? prev.filter(id => id !== familyId) 
+        : [...prev, familyId]
+    );
+  };
+
+  // Confirm manual attendance save
+  const handleSaveManualAttendance = () => {
+    if (userRole === 'Viewer') {
+      alert('ليس لديك صلاحيات حفظ وتحرير كشف الحضور.');
+      return;
+    }
+    onAttendanceSaved(meetingDate, manualSelectedFamilyIds, notes, false); // merge=false to set absolute count state
+    setSaveSuccessMsg('تم حفظ وتعديل حضور هذا اليوم بنجاح في قاعدة البيانات! 🎉');
+    setTimeout(() => {
+      setSaveSuccessMsg(null);
+    }, 4000);
+  };
 
   // Manual additional family mapping state
   const [showAddManual, setShowAddManual] = useState(false);
   const [manualSelectedFamilyId, setManualSelectedFamilyId] = useState('');
 
   // Enrollment Tab States
+  const [useEnrollSimulation, setUseEnrollSimulation] = useState(true);
   const [enrollSimulatedText, setEnrollSimulatedText] = useState(ENROLL_SPEECH_MOCKS[0].text);
   const [showEnrollDropdown, setShowEnrollDropdown] = useState(false);
   const [enrollTranscript, setEnrollTranscript] = useState('');
@@ -320,12 +369,38 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
           })
         });
 
+        let data;
         if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || 'حدث خطأ غير متوقع أثناء المعالجة بالذكاء الاصطناعي');
+          let errMsg = 'حدث خطأ غير متوقع أثناء معالجة الصوت بالذكاء الاصطناعي.';
+          try {
+            const errData = await res.json();
+            errMsg = errData.error || errMsg;
+            if (errData.details) {
+              errMsg += ` (${errData.details})`;
+            }
+          } catch (e) {
+            try {
+              const text = await res.text();
+              if (res.status === 413 || text.includes('Payload Too Large') || text.includes('too large')) {
+                errMsg = 'حجم التسجيل الصوتي كبير جداً. يرجى تسجيل مقطع صوتي أقصر (أقل من دقيقة) أو تفعيل خيار المحاكاة للتجربة الفورية.';
+              } else if (res.status === 504 || text.includes('Gateway Timeout')) {
+                errMsg = 'انتهت مهلة طلب معالجة الصوت بسبب كبر حجم الملف أو بطء الاتصال بالخادم. يرجى محاولة تسجيل مقطع أقصر.';
+              } else {
+                errMsg = `حدث خطأ فني بالخادم (رمز الاستجابة: ${res.status}). يرجى التأكد من تشغيل الخادم والاتصال بالشبكة.`;
+              }
+            } catch (txtErr) {
+              errMsg = `استجابة غير صالحة من الخادم (رمز الاستجابة: ${res.status}).`;
+            }
+          }
+          throw new Error(errMsg);
         }
 
-        const data = await res.json();
+        try {
+          data = await res.json();
+        } catch (jsonErr) {
+          throw new Error('فشل الخادم في إرجاع بيانات بتنسيق JSON صالح.');
+        }
+
         setTranscript(data.rawTranscript || '(تم التفريغ الصوتي بنجاح)');
         
         const mapped = (data.matches || []).map((item: any) => ({
@@ -509,12 +584,37 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
           })
         });
 
+        let data;
         if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || 'فشلت معالجة الصوت العربي بالذكاء الاصطناعي');
+          let errMsg = 'فشلت معالجة الصوت العربي بالذكاء الاصطناعي.';
+          try {
+            const errData = await res.json();
+            errMsg = errData.error || errMsg;
+            if (errData.details) {
+              errMsg += ` (${errData.details})`;
+            }
+          } catch (e) {
+            try {
+              const text = await res.text();
+              if (res.status === 413 || text.includes('Payload Too Large') || text.includes('too large')) {
+                errMsg = 'حجم التسجيل الصوتي كبير جداً. يرجى تسجيل مقطع صوتي أقصر (أقل من دقيقة) أو تفعيل خيار المحاكاة للتجربة الفورية.';
+              } else if (res.status === 504 || text.includes('Gateway Timeout')) {
+                errMsg = 'انتهت مهلة طلب معالجة الصوت بسبب كبر حجم الملف أو بطء الاتصال بالخادم. يرجى محاولة تسجيل مقطع أقصر.';
+              } else {
+                errMsg = `حدث خطأ فني بالخادم (رمز الاستجابة: ${res.status}). يرجى التأكد من تشغيل الخادم والاتصال بالشبكة.`;
+              }
+            } catch (txtErr) {
+              errMsg = `استجابة غير صالحة من الخادم (رمز الاستجابة: ${res.status}).`;
+            }
+          }
+          throw new Error(errMsg);
         }
 
-        const data = await res.json();
+        try {
+          data = await res.json();
+        } catch (jsonErr) {
+          throw new Error('فشل الخادم في إرجاع بيانات بتنسيق JSON صالح.');
+        }
         setEnrollTranscript(data.rawTranscript || '(تم التفريغ الصوتي بنجاح)');
         setEnrollResult({
           husbandName: data.husbandName || '',
@@ -716,371 +816,549 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
             </div>
 
             {/* Mode Selector */}
-            <div className="flex items-center gap-4 mt-5 border-t border-slate-100 pt-4">
-              <span className="text-xs font-bold text-slate-600">نظام الإدخال والتحضير:</span>
-              <div className="flex bg-slate-100 rounded-xl p-0.5 border border-slate-200/40" id="input_mode_toggle_group">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4 mt-5 border-t border-slate-100 pt-4">
+              <span className="text-xs font-bold text-slate-600 shrink-0">نظام الإدخال والتحضير:</span>
+              <div className="flex flex-wrap bg-slate-100 rounded-xl p-0.5 border border-slate-200/40 gap-0.5" id="input_mode_toggle_group">
                 <button
                   type="button"
                   onClick={() => {
-                    setUseSimulation(true);
+                    setInputMode('manual');
                     setErrorMsg(null);
                   }}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                    useSimulation 
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                    inputMode === 'manual' 
                       ? 'bg-white text-slate-900 shadow-sm' 
                       : 'text-slate-500 hover:text-slate-850'
                   }`}
                 >
-                  محاكاة وتدريب ذكي (بدون ميكروفون)
+                  <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+                  التحضير والتسجيل اليدوي الفوري
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setUseSimulation(false);
+                    setInputMode('simulation');
                     setErrorMsg(null);
                   }}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                    !useSimulation 
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                    inputMode === 'simulation' 
                       ? 'bg-white text-slate-900 shadow-sm' 
                       : 'text-slate-500 hover:text-slate-850'
                   }`}
                 >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  محاكاة بالذكاء الاصطناعي (أمثلة مكتوبة)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInputMode('live');
+                    setErrorMsg(null);
+                  }}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                    inputMode === 'live' 
+                      ? 'bg-white text-slate-900 shadow-sm' 
+                      : 'text-slate-500 hover:text-slate-850'
+                  }`}
+                >
+                  <Mic className="w-3.5 h-3.5 text-blue-600" />
                   تسجيل صوتي حي / رفع ملف صوتي
                 </button>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Left Input panel (based on toggle) */}
-            <div className="lg:col-span-5 space-y-6">
-              {useSimulation ? (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1">
-                      <Sparkles className="w-4 h-4 text-amber-500 animate-pulse" />
-                      مدبر المحاكاة ومطابقة النص العربي
-                    </span>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => setShowSimulateDropdown(!showSimulateDropdown)}
-                        className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1 bg-blue-50 px-2.5 py-1.5 rounded-lg border border-blue-100 cursor-pointer"
-                      >
-                        عرض لغات وأقاويل جاهزة
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      </button>
-                      
-                      {showSimulateDropdown && (
-                        <div className="absolute left-0 mt-1.5 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl z-20 overflow-hidden text-right animate-fade-in">
-                          {PRESET_SPEECH_MOCKS.map((mock, index) => (
-                            <button
-                              key={index}
-                              type="button"
-                              onClick={() => {
-                                setSimulatedText(mock.text);
-                                setShowSimulateDropdown(false);
-                              }}
-                              className="w-full px-4 py-2.5 text-xs hover:bg-slate-50 text-slate-800 border-b border-slate-100 last:border-b-0 block text-right cursor-pointer"
-                            >
-                              <div className="font-bold text-blue-600">{mock.label}</div>
-                              <div className="text-slate-500 truncate mt-0.5 font-medium">{mock.text}</div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+          {inputMode === 'manual' ? (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 mt-6 animate-fade-in" id="manual_attendance_panel">
+              {/* Header and statistics */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-150 pb-4 mb-6">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                    <Users className="w-5 h-5 text-emerald-600" />
+                    دفتر تحضير وتسجيل الحضور المباشر بالنقرة
+                  </h3>
+                  <span className="text-xs text-slate-500 font-medium">سجل الحضور يدوياً بالنقر مباشرةً على بطاقة العائلة المحددة. يتزامن الحضور تلقائياً مع التاريخ المختار.</span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <div className="bg-emerald-50 text-emerald-850 text-xs font-extrabold px-3 py-2 rounded-xl border border-emerald-100 font-mono">
+                    حاضر: {manualSelectedFamilyIds.length} عائلات
                   </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-600">اكتب هنا نص الحاضرين باللهجة المصرية العامية:</label>
-                    <textarea
-                      value={simulatedText}
-                      rows={4}
-                      onChange={(e) => setSimulatedText(e.target.value)}
-                      className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all font-mono leading-relaxed"
-                      placeholder="مثال: حضر النهاردة الأستاذ وجدي حافظ من اللجنة، ومينا سمير جاب معاه يوسف..."
-                    />
+                  <div className="bg-slate-50 text-slate-600 text-xs font-semibold px-3 py-2 rounded-xl border border-slate-200/50 font-mono">
+                    غائب: {Math.max(0, families.length - manualSelectedFamilyIds.length)} عائلات
                   </div>
+                </div>
+              </div>
 
+              {/* Quick search input */}
+              <div className="relative mb-6">
+                <input
+                  type="text"
+                  value={manualSearchQuery}
+                  onChange={(e) => setManualSearchQuery(e.target.value)}
+                  placeholder="ابحث هنا عن عائلة بالاسم، لقب الزوج، الهاتف، العنوان، أو أسماء الأبناء..."
+                  className="w-full bg-slate-50/50 border border-slate-250 text-slate-800 rounded-xl text-xs font-semibold py-3 px-10 outline-none focus:border-emerald-500 focus:bg-white transition-all text-right"
+                  dir="rtl"
+                />
+                <div className="absolute right-3.5 top-3.5 text-slate-400">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+                {manualSearchQuery && (
                   <button
                     type="button"
-                    disabled={isLoading || !simulatedText}
-                    onClick={handleProcessAttendance}
-                    className="w-full py-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                    onClick={() => setManualSearchQuery('')}
+                    className="absolute left-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
-                    {isLoading ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-4 h-4" />
-                    )}
-                    تشغيل محرك المطابقة الذكي بالذكاء الاصطناعي
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Success indicator */}
+              {saveSuccessMsg && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mb-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-800 rounded-xl p-4 text-xs font-bold text-center"
+                >
+                  {saveSuccessMsg}
+                </motion.div>
+              )}
+
+              {/* Families Selection Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 max-h-[500px] overflow-y-auto p-1.5 border border-slate-100 rounded-2xl bg-slate-50/20">
+                {(() => {
+                  const filtered = families.filter(fam => {
+                    const query = manualSearchQuery.trim().toLowerCase();
+                    if (!query) return true;
+                    return (
+                      fam.husbandName.toLowerCase().includes(query) ||
+                      fam.wifeName.toLowerCase().includes(query) ||
+                      (fam.husbandPhone && fam.husbandPhone.includes(query)) ||
+                      (fam.wifePhone && fam.wifePhone.includes(query)) ||
+                      (fam.address && fam.address.toLowerCase().includes(query)) ||
+                      (fam.notes && fam.notes.toLowerCase().includes(query)) ||
+                      (fam.children && fam.children.some(c => c.name.toLowerCase().includes(query)))
+                    );
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="col-span-full py-20 text-center text-slate-400 space-y-2">
+                        <Users className="w-8 h-8 mx-auto stroke-1" />
+                        <span className="text-xs font-bold block">لم يتم العثور على أي عائلات متطابقة مع البحث.</span>
+                      </div>
+                    );
+                  }
+
+                  return filtered.map(fam => {
+                    const isSelected = manualSelectedFamilyIds.includes(fam.id);
+                    return (
+                      <div
+                        key={fam.id}
+                        onClick={() => handleToggleManualFamily(fam.id)}
+                        className={`border rounded-xl p-3.5 cursor-pointer transition-all flex items-start gap-3 relative overflow-hidden select-none ${
+                          isSelected 
+                            ? 'bg-emerald-50/70 border-emerald-400 ring-1 ring-emerald-500/10 shadow-sm' 
+                            : 'bg-white border-slate-200 hover:border-slate-350 hover:bg-slate-50/60 shadow-xs'
+                        }`}
+                      >
+                         {/* Circle select tag */}
+                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                          isSelected 
+                            ? 'bg-emerald-600 border-emerald-600 text-white' 
+                            : 'border-slate-300 bg-white'
+                        }`}>
+                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                        </div>
+
+                        <div className="flex-1 min-w-0 text-right">
+                          <h4 className="font-bold text-slate-900 text-xs truncate">
+                            {fam.husbandName}
+                          </h4>
+                          <h5 className="font-bold text-slate-700 text-[11px] truncate mt-0.5">
+                            {fam.wifeName}
+                          </h5>
+                          
+                          <p className="text-[10px] text-slate-500 mt-1.5 flex items-center gap-1 font-mono truncate leading-none justify-end">
+                            <span>{fam.husbandPhone || fam.wifePhone || 'بدون تليفون'}</span>
+                            <Phone className="w-2.5 h-2.5 text-slate-400" />
+                          </p>
+
+                          {fam.children && fam.children.length > 0 ? (
+                            <span className="inline-block mt-2 bg-blue-50 text-blue-700 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md border border-blue-100">
+                              الأبناء: {fam.children.length}
+                            </span>
+                          ) : (
+                            <span className="inline-block mt-2 bg-stone-50 text-stone-500 text-[9px] font-bold px-1.5 py-0.5 rounded-md border border-stone-200/50">
+                              لا يوجد أبناء
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Slide color accent */}
+                        {isSelected && (
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-600" />
+                        )}
+                      </div>
+                    );
+                  })
+                })()}
+              </div>
+
+              {/* Action save bar */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 border-t border-slate-100 pt-5">
+                <div className="text-xs text-slate-500 font-semibold text-right sm:text-right leading-relaxed">
+                  * يتم تسجيل الحضور بشكل دوري. يمكنك مراجعة كشوف حضور اليوم أو أي تاريخ سابق من الرسوم البيانية أيضاً.
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    disabled={userRole === 'Viewer'}
+                    onClick={handleSaveManualAttendance}
+                    className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-600/10 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4 stroke-[2.5]" />
+                    حفظ وتأكيد كشف الحضور اليدوي ({manualSelectedFamilyIds.length})
                   </button>
                 </div>
-              ) : (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 space-y-6">
-                  <span className="text-xs font-bold text-slate-850 block mb-2">المسجل والمحلل الصوتي الفعلي للاجتماع</span>
-                  
-                  {/* Voice Recorder Actions */}
-                  <div className="bg-slate-50 rounded-2xl p-6 border border-slate-150 flex flex-col items-center justify-center space-y-4">
-                    {isRecording ? (
-                      <div className="flex flex-col items-center space-y-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 bg-red-600 rounded-full animate-ping" />
-                          <span className="text-sm font-mono font-bold text-red-600">{formatDuration(recordingDuration)}</span>
-                        </div>
-                        <p className="text-xs text-slate-550 text-center font-bold">ميكروفون المتصفح يسجل الان... اذكر أسماء الحاضرين و عائلاتهم بوضوح</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left Input panel (based on toggle) */}
+              <div className="lg:col-span-5 space-y-6">
+                {useSimulation ? (
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                        <Sparkles className="w-4 h-4 text-amber-500 animate-pulse" />
+                        مدبر المحاكاة ومطابقة النص العربي
+                      </span>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowSimulateDropdown(!showSimulateDropdown)}
+                          className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1 bg-blue-50 px-2.5 py-1.5 rounded-lg border border-blue-100 cursor-pointer"
+                        >
+                          عرض لغات وأقاويل جاهزة
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
                         
-                        <button
-                          type="button"
-                          onClick={stopRecording}
-                          className="mt-2 w-12 h-12 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center shadow-lg shadow-red-600/30 transition-all cursor-pointer"
-                        >
-                          <Square className="w-5 h-5 fill-current" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center space-y-2">
-                        <p className="text-xs text-slate-500 text-center font-semibold">اضغط على الزر للبدء في تلاوة الحاضرين عبر الميكروفون</p>
-                        <button
-                          type="button"
-                          onClick={startRecording}
-                          disabled={userRole === 'Viewer'}
-                          className="w-14 h-14 bg-[#2563EB] hover:bg-blue-700 disabled:opacity-55 text-white rounded-full flex items-center justify-center shadow-md shadow-blue-500/20 transition-all cursor-pointer"
-                        >
-                          <Mic className="w-6 h-6" />
-                        </button>
-                        {audioUrl && (
-                          <div className="pt-4 w-full flex flex-col items-center space-y-2 border-t border-slate-200/60 mt-2">
-                            <span className="text-xs font-bold text-slate-650">التسجيل الجاهز الحالي:</span>
-                            <audio src={audioUrl} controls className="w-full max-w-xs h-10" />
+                        {showSimulateDropdown && (
+                          <div className="absolute left-0 mt-1.5 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl z-20 overflow-hidden text-right animate-fade-in">
+                            {PRESET_SPEECH_MOCKS.map((mock, index) => (
+                              <button
+                                key={index}
+                                type="button"
+                                onClick={() => {
+                                  setSimulatedText(mock.text);
+                                  setShowSimulateDropdown(false);
+                                }}
+                                className="w-full px-4 py-2.5 text-xs hover:bg-slate-50 text-slate-800 border-b border-slate-100 last:border-b-0 block text-right cursor-pointer"
+                              >
+                                <div className="font-bold text-blue-600">{mock.label}</div>
+                                <div className="text-slate-500 truncate mt-0.5 font-medium">{mock.text}</div>
+                              </button>
+                            ))}
                           </div>
                         )}
                       </div>
-                    )}
-                  </div>
-
-                  {/* Or upload audio file */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-600">
-                      <span>أو رفع ملف صوتي جاهز من تليفونك/كمبيوترك:</span>
                     </div>
-                    <div className="relative border border-slate-200 rounded-xl p-3.5 bg-slate-50 hover:bg-slate-100/50 transition-all cursor-pointer">
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        disabled={userRole === 'Viewer'}
-                        onChange={handleAudioFileUpload}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-600">اكتب هنا نص الحاضرين باللهجة المصرية العامية:</label>
+                      <textarea
+                        value={simulatedText}
+                        rows={4}
+                        onChange={(e) => setSimulatedText(e.target.value)}
+                        className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all font-mono leading-relaxed"
+                        placeholder="مثال: حضر النهاردة الأستاذ وجدي حافظ من اللجنة، ومينا سمير جاب معاه يوسف..."
                       />
-                      <div className="flex items-center gap-2 text-slate-700 justify-center">
-                        <FileAudio className="w-4 h-4 text-slate-500" />
-                        <span className="text-xs font-bold">اختر ملف صوتي (MP3, WAV, WebM)</span>
-                      </div>
                     </div>
-                  </div>
 
-                  <button
-                    type="button"
-                    disabled={isLoading || !audioBlob || userRole === 'Viewer'}
-                    onClick={handleProcessAttendance}
-                    className="w-full py-3 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
-                  >
-                    {isLoading ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-4 h-4" />
-                    )}
-                    تشغيل التحليل الصوتي الذكي (Gemini API)
-                  </button>
-                </div>
-              )}
-
-              {errorMsg && (
-                <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex gap-2.5 text-red-800 animate-fade-in">
-                  <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-600 mt-0.5" />
-                  <div className="text-xs space-y-1">
-                    <span className="font-bold">فشل أثناء المعالجة:</span>
-                    <p className="font-semibold leading-relaxed">{errorMsg}</p>
                     <button
                       type="button"
-                      onClick={() => {
-                        setUseSimulation(true);
-                        setErrorMsg(null);
-                      }}
-                      className="underline block font-bold text-red-700 mt-1 cursor-pointer"
+                      disabled={isLoading || !simulatedText}
+                      onClick={handleProcessAttendance}
+                      className="w-full py-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
                     >
-                      التحويل لنظام المحاكاة الذكي الآمن
+                      {isLoading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-4 h-4" />
+                      )}
+                      تشغيل محرك المطابقة الذكي بالذكاء الاصطناعي
                     </button>
                   </div>
-                </div>
-              )}
-            </div>
-
-            {/* Right Output Analysis Results Panel */}
-            <div className="lg:col-span-7">
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 min-h-[350px] relative">
-                {isLoading ? (
-                  <div className="absolute inset-0 bg-white/70 backdrop-blur-xs flex flex-col items-center justify-center z-10 space-y-4 rounded-2xl animate-fade-in">
-                    <div className="relative flex items-center justify-center">
-                      <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" />
-                      <Sparkles className="w-5 h-5 text-amber-500 absolute animate-pulse" />
-                    </div>
-                    <div className="text-center space-y-1 px-4">
-                      <h4 className="font-bold text-slate-1000 text-sm">يقوم خادم الذكاء الاصطناعي الآن بصياغة وفلترة حضور الأسر...</h4>
-                      <p className="text-xs text-slate-550 font-bold">يتولى نموذج Gemini تحليل العامية المصرية ومطابقة الكنى والألقاب بدقة فائقة</p>
-                    </div>
-                  </div>
-                ) : null}
-
-                {candidates.length === 0 && !isLoading ? (
-                  <div className="text-center py-20 flex flex-col items-center justify-center space-y-3">
-                    <div className="p-3 bg-slate-50 rounded-full text-slate-400">
-                      <Sparkles className="w-8 h-8" />
-                    </div>
-                    <h4 className="text-sm font-bold text-slate-700">لا نتائج محللة حالياً</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto font-medium">
-                      قم بتشغيل معالجة الحضور في القسم الأيمن ليعرض لك الذكاء الاصطناعي هنا التفريغ والـ Confidence Scores مع عينات المراجعة الموصى بها.
-                    </p>
-                  </div>
                 ) : (
-                  <div className="space-y-6">
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">التفريغ الصوتي المحلل (Transcript)</h3>
-                      <div className="bg-slate-50 border border-slate-150 rounded-xl p-4 text-slate-800 text-xs font-bold leading-relaxed italic">
-                        &ldquo; {transcript} &rdquo;
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
-                        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                          <CheckSquare className="w-4 h-4 text-emerald-600" />
-                          نتائج المطابقة ومستوى الثقة (AI Confidence Scoring)
-                        </h3>
-                        <button
-                          type="button"
-                          onClick={() => setShowAddManual(!showAddManual)}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          <PlusCircle className="w-3.5 h-3.5" />
-                          إضافة عائلة يدوياً
-                        </button>
-                      </div>
-
-                      {showAddManual && (
-                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-4 flex gap-2 items-center animate-fade-in">
-                          <select
-                            value={manualSelectedFamilyId}
-                            onChange={(e) => setManualSelectedFamilyId(e.target.value)}
-                            className="bg-white border text-xs border-slate-250 text-slate-850 font-bold rounded-lg p-2 flex-1 outline-none h-9"
-                          >
-                            <option value="">-- اختر عائلة لإضافتها يدوياً --</option>
-                            {families.map(f => (
-                              <option key={f.id} value={f.id}>{f.husbandName} & {f.wifeName}</option>
-                            ))}
-                          </select>
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 space-y-6">
+                    <span className="text-xs font-bold text-slate-850 block mb-2">المسجل والمحلل الصوتي الفعلي للاجتماع</span>
+                    
+                    {/* Voice Recorder Actions */}
+                    <div className="bg-slate-50 rounded-2xl p-6 border border-slate-150 flex flex-col items-center justify-center space-y-4">
+                      {isRecording ? (
+                        <div className="flex flex-col items-center space-y-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 bg-red-600 rounded-full animate-ping" />
+                            <span className="text-sm font-mono font-bold text-red-600">{formatDuration(recordingDuration)}</span>
+                          </div>
+                          <p className="text-xs text-slate-550 text-center font-bold">ميكروفون المتصفح يسجل الان... اذكر أسماء الحاضرين و عائلاتهم بوضوح</p>
+                          
                           <button
                             type="button"
-                            onClick={handleAddManualFamily}
-                            disabled={!manualSelectedFamilyId}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-3  rounded-lg h-9 transition-colors disabled:opacity-50 cursor-pointer"
+                            onClick={stopRecording}
+                            className="mt-2 w-12 h-12 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center shadow-lg shadow-red-600/30 transition-all cursor-pointer"
                           >
-                            إضافة
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowAddManual(false)}
-                            className="text-slate-550 hover:text-slate-800 p-1 cursor-pointer"
-                          >
-                            <X className="w-4 h-4" />
+                            <Square className="w-5 h-5 fill-current" />
                           </button>
                         </div>
-                      )}
-
-                      <div className="space-y-3">
-                        {candidates.map((cand, idx) => (
-                          <div 
-                            key={cand.familyId} 
-                            className={`border rounded-2xl p-4 transition-all flex items-start gap-3 ${
-                              cand.isSelected 
-                                ? 'bg-slate-50 border-slate-200 shadow-sm' 
-                                : 'bg-white border-transparent/10 opacity-70'
-                            }`}
+                      ) : (
+                        <div className="flex flex-col items-center space-y-2">
+                          <p className="text-xs text-slate-500 text-center font-semibold">اضغط على الزر للبدء في تلاوة الحاضرين عبر الميكروفون</p>
+                          <button
+                            type="button"
+                            onClick={startRecording}
+                            disabled={userRole === 'Viewer'}
+                            className="w-14 h-14 bg-[#2563EB] hover:bg-blue-700 disabled:opacity-55 text-white rounded-full flex items-center justify-center shadow-md shadow-blue-500/20 transition-all cursor-pointer"
                           >
-                            <input
-                              type="checkbox"
-                              checked={cand.isSelected}
-                              onChange={() => handleToggleCandidate(idx)}
-                              className="w-4 h-4 text-blue-600 border-slate-350 rounded focus:ring-blue-500 mt-1 cursor-pointer"
-                            />
-                            <div className="flex-1 space-y-1">
-                              <div className="flex items-center justify-between">
-                                <span className="font-bold text-slate-900 text-sm">{cand.husbandName} & {cand.wifeName}</span>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-slate-400 text-[10px] font-bold">نسبة التأكيد:</span>
-                                  <span className={`text-xs font-mono font-bold ${
-                                    cand.confidence >= 90 ? 'text-emerald-700 bg-emerald-50 border border-emerald-100' : 
-                                    cand.confidence >= 70 ? 'text-amber-700 bg-amber-50 border border-amber-100' : 'text-[#EF4444] bg-red-50 border border-red-100'
-                                  } px-2 py-0.5 rounded-md`}>
-                                    {cand.confidence}%
-                                  </span>
-                                </div>
-                              </div>
-                              
-                              <p className="text-xs text-slate-650 flex items-center gap-1 font-semibold">
-                                <span className="font-bold text-slate-805">دليل السماع:</span>
-                                <span>&rdquo;{cand.spokenSnippet}&ldquo;</span>
-                              </p>
-
-                              <div className="text-[11px] text-slate-500 italic bg-white p-2 rounded-xl border border-slate-150 flex items-center justify-between mt-1.5 font-medium leading-relaxed">
-                                <div>
-                                  <strong className="text-slate-600 font-bold">تفسير الذكاء الاصطناعي:</strong> {cand.matchReason}
-                                </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <span className="text-[10px] text-slate-400 font-bold">تعديل النسبة:</span>
-                                  <select
-                                    value={cand.confidence}
-                                    onChange={(e) => handleUpdateConfidence(idx, parseInt(e.target.value))}
-                                    className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded text-[10px] p-0.5 outline-none bg-white font-bold"
-                                  >
-                                    {[100, 95, 90, 85, 80, 75, 70, 60, 50, 40].map(v => (
-                                      <option key={v} value={v}>{v}%</option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
+                            <Mic className="w-6 h-6" />
+                          </button>
+                          {audioUrl && (
+                            <div className="pt-4 w-full flex flex-col items-center space-y-2 border-t border-slate-200/60 mt-2">
+                              <span className="text-xs font-bold text-slate-650">التسجيل الجاهز الحالي:</span>
+                              <audio src={audioUrl} controls className="w-full max-w-xs h-10" />
                             </div>
-                          </div>
-                        ))}
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Or upload audio file */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+                        <span>أو رفع ملف صوتي جاهز من تليفونك/كمبيوترك:</span>
+                      </div>
+                      <div className="relative border border-slate-200 rounded-xl p-3.5 bg-slate-50 hover:bg-slate-100/50 transition-all cursor-pointer">
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          disabled={userRole === 'Viewer'}
+                          onChange={handleAudioFileUpload}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <div className="flex items-center gap-2 text-slate-700 justify-center">
+                          <FileAudio className="w-4 h-4 text-slate-500" />
+                          <span className="text-xs font-bold">اختر ملف صوتي (MP3, WAV, WebM)</span>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-5">
+                    <button
+                      type="button"
+                      disabled={isLoading || !audioBlob || userRole === 'Viewer'}
+                      onClick={handleProcessAttendance}
+                      className="w-full py-3 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                    >
+                      {isLoading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-4 h-4" />
+                      )}
+                      تشغيل التحليل الصوتي الذكي (Gemini API)
+                    </button>
+                  </div>
+                )}
+
+                {errorMsg && (
+                  <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex gap-2.5 text-red-800 animate-fade-in">
+                    <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-600 mt-0.5" />
+                    <div className="text-xs space-y-1">
+                      <span className="font-bold">فشل أثناء المعالجة:</span>
+                      <p className="font-semibold leading-relaxed">{errorMsg}</p>
                       <button
                         type="button"
                         onClick={() => {
-                          setTranscript('');
-                          setCandidates([]);
+                          setInputMode('simulation');
+                          setErrorMsg(null);
                         }}
-                        className="px-4 py-2 text-slate-600 hover:bg-slate-50 rounded-xl text-xs font-bold transition-all cursor-pointer border border-transparent hover:border-slate-200"
+                        className="underline block font-bold text-red-700 mt-1 cursor-pointer"
                       >
-                        إلغاء المعاينة
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleConfirmAttendanceSave}
-                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-600/15 cursor-pointer animate-pulse-slow"
-                      >
-                        <Check className="w-4 h-4" />
-                        حفظ وتأكيد حضور العائلات المحللة ({candidates.filter(c => c.isSelected).length})
+                        التحويل لنظام المحاكاة الذكي الآمن
                       </button>
                     </div>
                   </div>
                 )}
               </div>
+
+              {/* Right Output Analysis Results Panel */}
+              <div className="lg:col-span-7">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 min-h-[350px] relative">
+                  {isLoading ? (
+                    <div className="absolute inset-0 bg-white/70 backdrop-blur-xs flex flex-col items-center justify-center z-10 space-y-4 rounded-2xl animate-fade-in">
+                      <div className="relative flex items-center justify-center">
+                        <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin" />
+                        <Sparkles className="w-5 h-5 text-amber-500 absolute animate-pulse" />
+                      </div>
+                      <div className="text-center space-y-1 px-4">
+                        <h4 className="font-bold text-slate-1000 text-sm">يقوم خادم الذكاء الاصطناعي الآن بصياغة وفلترة حضور الأسر...</h4>
+                        <p className="text-xs text-slate-550 font-bold">يتولى نموذج Gemini تحليل العامية المصرية ومطابقة الكنى والألقاب بدقة فائقة</p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {candidates.length === 0 && !isLoading ? (
+                    <div className="text-center py-20 flex flex-col items-center justify-center space-y-3">
+                      <div className="p-3 bg-slate-50 rounded-full text-slate-400">
+                        <Sparkles className="w-8 h-8" />
+                      </div>
+                      <h4 className="text-sm font-bold text-slate-700">لا نتائج محللة حالياً</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto font-medium">
+                        قم بتشغيل معالجة الحضور في القسم الأيمن ليعرض لك الذكاء الاصطناعي هنا التفريغ والـ Confidence Scores مع عينات المراجعة الموصى بها.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">التفريغ الصوتي المحلل (Transcript)</h3>
+                        <div className="bg-slate-50 border border-slate-150 rounded-xl p-4 text-slate-800 text-xs font-bold leading-relaxed italic">
+                          &ldquo; {transcript} &rdquo;
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
+                          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                            <CheckSquare className="w-4 h-4 text-emerald-600" />
+                            نتائج المطابقة ومستوى الثقة (AI Confidence Scoring)
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setShowAddManual(!showAddManual)}
+                            className="text-xs text-blue-600 hover:text-blue-800 font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5" />
+                            إضافة عائلة يدوياً
+                          </button>
+                        </div>
+
+                        {showAddManual && (
+                          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-4 flex gap-2 items-center animate-fade-in">
+                            <select
+                              value={manualSelectedFamilyId}
+                              onChange={(e) => setManualSelectedFamilyId(e.target.value)}
+                              className="bg-white border text-xs border-slate-250 text-slate-850 font-bold rounded-lg p-2 flex-1 outline-none h-9"
+                            >
+                              <option value="">-- اختر عائلة لإضافتها يدوياً --</option>
+                              {families.map(f => (
+                                <option key={f.id} value={f.id}>{f.husbandName} & {f.wifeName}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={handleAddManualFamily}
+                              disabled={!manualSelectedFamilyId}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-3  rounded-lg h-9 transition-colors disabled:opacity-50 cursor-pointer"
+                            >
+                              إضافة
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowAddManual(false)}
+                              className="text-slate-550 hover:text-slate-800 p-1 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="space-y-3">
+                          {candidates.map((cand, idx) => (
+                            <div 
+                              key={cand.familyId} 
+                              className={`border rounded-2xl p-4 transition-all flex items-start gap-3 ${
+                                cand.isSelected 
+                                  ? 'bg-slate-50 border-slate-200 shadow-sm' 
+                                  : 'bg-white border-transparent/10 opacity-70'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={cand.isSelected}
+                                onChange={() => handleToggleCandidate(idx)}
+                                className="w-4 h-4 text-blue-600 border-slate-350 rounded focus:ring-blue-500 mt-1 cursor-pointer"
+                              />
+                              <div className="flex-1 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-slate-900 text-sm">{cand.husbandName} & {cand.wifeName}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-slate-400 text-[10px] font-bold">نسبة التأكيد:</span>
+                                    <span className={`text-xs font-mono font-bold ${
+                                      cand.confidence >= 90 ? 'text-emerald-700 bg-emerald-50 border border-emerald-100' : 
+                                      cand.confidence >= 70 ? 'text-amber-700 bg-amber-50 border border-amber-100' : 'text-[#EF4444] bg-red-50 border border-red-100'
+                                    } px-2 py-0.5 rounded-md`}>
+                                      {cand.confidence}%
+                                    </span>
+                                  </div>
+                                </div>
+                                
+                                <p className="text-xs text-slate-650 flex items-center gap-1 font-semibold">
+                                  <span className="font-bold text-slate-805">دليل السماع:</span>
+                                  <span>&rdquo;{cand.spokenSnippet}&ldquo;</span>
+                                </p>
+
+                                <div className="text-[11px] text-slate-500 italic bg-white p-2 rounded-xl border border-slate-150 flex items-center justify-between mt-1.5 font-medium leading-relaxed">
+                                  <div>
+                                    <strong className="text-slate-600 font-bold">تفسير الذكاء الاصطناعي:</strong> {cand.matchReason}
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <span className="text-[10px] text-slate-400 font-bold">تعديل النسبة:</span>
+                                    <select
+                                      value={cand.confidence}
+                                      onChange={(e) => handleUpdateConfidence(idx, parseInt(e.target.value))}
+                                      className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded text-[10px] p-0.5 outline-none bg-white font-bold"
+                                    >
+                                      {[100, 95, 90, 85, 80, 75, 70, 60, 50, 40].map(v => (
+                                        <option key={v} value={v}>{v}%</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTranscript('');
+                            setCandidates([]);
+                          }}
+                          className="px-4 py-2 text-slate-600 hover:bg-slate-50 rounded-xl text-xs font-bold transition-all cursor-pointer border border-transparent hover:border-slate-200"
+                        >
+                          إلغاء المعاينة
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleConfirmAttendanceSave}
+                          className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-600/15 cursor-pointer animate-pulse-slow"
+                        >
+                          <Check className="w-4 h-4" />
+                          حفظ وتأكيد حضور العائلات المحللة ({candidates.filter(c => c.isSelected).length})
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </>
       ) : (
         <>
@@ -1101,11 +1379,11 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
                 <button
                   type="button"
                   onClick={() => {
-                    setUseSimulation(true);
+                    setUseEnrollSimulation(true);
                     setErrorMsg(null);
                   }}
                   className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                    useSimulation 
+                    useEnrollSimulation 
                       ? 'bg-white text-slate-900 shadow-sm' 
                       : 'text-slate-500 hover:text-slate-850'
                   }`}
@@ -1115,11 +1393,11 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
                 <button
                   type="button"
                   onClick={() => {
-                    setUseSimulation(false);
+                    setUseEnrollSimulation(false);
                     setErrorMsg(null);
                   }}
                   className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                    !useSimulation 
+                    !useEnrollSimulation 
                       ? 'bg-white text-slate-900 shadow-sm' 
                       : 'text-slate-500 hover:text-slate-850'
                   }`}
@@ -1133,7 +1411,7 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Left controller panel */}
             <div className="lg:col-span-5 space-y-6">
-              {useSimulation ? (
+              {useEnrollSimulation ? (
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-800 flex items-center gap-1">
@@ -1283,7 +1561,7 @@ export default function VoiceRecognizer({ families, onAttendanceSaved, onAddFami
                     <button
                       type="button"
                       onClick={() => {
-                        setUseSimulation(true);
+                        setUseEnrollSimulation(true);
                         setErrorMsg(null);
                       }}
                       className="underline block font-bold text-red-700 mt-1 cursor-pointer"

@@ -65,6 +65,64 @@ function getGeminiClient(): GoogleGenAI {
   return aiClient;
 }
 
+// Robust helper to perform automatic retries and model fallbacks for peak-demand (503/UNAVAILABLE) handling
+async function generateContentWithFallback(ai: GoogleGenAI, params: any, defaultModel: string = 'gemini-3.5-flash') {
+  // We use models that support audio/multimodal analysis.
+  // gemini-3.1-pro-preview works if they have paid key, gemini-3.5-flash is our study workhorse.
+  const models = [defaultModel, 'gemini-3.1-pro-preview', 'gemini-3.5-flash'];
+  let lastError: any = null;
+  
+  for (let i = 0; i < models.length; i++) {
+    const currentModel = models[i];
+    // Attempt up to 3 times for each model with exponential backoff
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`[Gemini AI] Trying model "${currentModel}" (Attempt ${attempt} of 3 for this model)`);
+        const response = await ai.models.generateContent({
+          ...params,
+          model: currentModel
+        });
+        
+        if (response && response.text) {
+          console.log(`[Gemini AI] Successfully executed generateContent using model "${currentModel}"`);
+          return response;
+        }
+        
+        throw new Error('Response text from Gemini was empty or invalid.');
+      } catch (error: any) {
+        lastError = error;
+        const errMessage = (error.message || '').toString();
+        const errStatus = (error.status || '').toString();
+        console.error(`[Gemini AI] Attempt with model "${currentModel}" failed (Attempt ${attempt}/3):`, errMessage);
+        
+        // Fast-fail non-transient, non-availability errors (e.g., paid-tier permission, invalid model errors)
+        const isTransient = 
+          errMessage.includes('503') || 
+          errMessage.includes('UNAVAILABLE') || 
+          errMessage.includes('429') || 
+          errMessage.includes('RESOURCE_EXHAUSTED') || 
+          errMessage.includes('demand') ||
+          errMessage.includes('limit') ||
+          errStatus.includes('UNAVAILABLE') ||
+          errStatus.includes('503');
+
+        if (!isTransient) {
+          console.log(`[Gemini AI] Non-transient error on "${currentModel}". Switching to next fallback model immediately.`);
+          break; // Break current attempts loop to check the next model
+        }
+
+        // Delay with backoff + jitter
+        if (i < models.length - 1 || attempt < 3) {
+          const delay = Math.pow(2, attempt) * 1500 + Math.random() * 1000;
+          console.log(`[Gemini AI] Transient 503/UNAVAILABLE or quota error. Retrying in ${Math.round(delay)}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+  }
+  throw lastError;
+}
+
 const app = express();
 // Increasing payload limit to support base64 audio recordings
 app.use(express.json({ limit: '50mb' }));
@@ -321,13 +379,13 @@ app.post('/api/db/rebuild-connection', (req, res) => {
 
 // 8. Voice Recognition with Real Gemini API
 app.post('/api/attendance/voice', async (req, res) => {
-  const { audioBase64, mimeType, userEmail, userRole } = req.body;
-
-  if (!audioBase64) {
-    return res.status(400).json({ error: 'محتوى الصوت مفقود' });
-  }
-
   try {
+    const { audioBase64, mimeType, userEmail, userRole } = req.body || {};
+
+    if (!audioBase64) {
+      return res.status(400).json({ error: 'محتوى الصوت مفقود' });
+    }
+
     const db = getDatabase();
     const familiesExcerpt = db.families.map(f => ({
       id: f.id,
@@ -369,8 +427,7 @@ app.post('/api/attendance/voice', async (req, res) => {
     // Access Gemini Client lazily
     const ai = getGeminiClient();
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
+    const response = await generateContentWithFallback(ai, {
       contents: {
         parts: [
           {
@@ -435,13 +492,12 @@ app.post('/api/attendance/voice', async (req, res) => {
 
 // 8b. Add Family with Voice using real Gemini API
 app.post('/api/family/voice', async (req, res) => {
-  const { audioBase64, mimeType, userEmail, userRole } = req.body;
-
-  if (!audioBase64) {
-    return res.status(400).json({ error: 'محتوى الصوت مفقود' });
-  }
-
   try {
+    const { audioBase64, mimeType, userEmail, userRole } = req.body || {};
+
+    if (!audioBase64) {
+      return res.status(400).json({ error: 'محتوى الصوت مفقود' });
+    }
     const promptText = `
       You are an expert Arabic speech analyzer and data extractor for family data registration.
       Your goal is to transcribe the Egyptian speech which describes registering a new family (husband, wife, marriage date, phone numbers, address, and their children).
@@ -473,8 +529,7 @@ app.post('/api/family/voice', async (req, res) => {
     const sanitizedMime = cleanMimeType(mimeType);
     const ai = getGeminiClient();
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
+    const response = await generateContentWithFallback(ai, {
       contents: {
         parts: [
           {
