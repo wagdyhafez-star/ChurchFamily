@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -5,6 +6,43 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { getDatabase, saveDatabase, addAuditLog, rebuildDatabaseConnection } from './server_db';
 import { DbSchema, Family, AttendanceRecord, ChurchUser } from './src/types';
+
+// Safe helper to normalize audio MIME types for the Gemini API
+function cleanMimeType(mime: string): string {
+  if (!mime) return 'audio/webm';
+  // Strip codec attributes, e.g. "audio/webm;codecs=opus" -> "audio/webm"
+  let clean = mime.split(';')[0].trim().toLowerCase();
+
+  // Normalize other browser or manual upload MIME variants to those supported by Gemini
+  if (clean.includes('wav') || clean.includes('wave')) {
+    return 'audio/wav';
+  }
+  if (clean.includes('mp3') || clean.includes('mpeg')) {
+    return 'audio/mpeg';
+  }
+  if (clean.includes('mp4') || clean.includes('m4a') || clean.includes('aac')) {
+    return 'audio/mp4';
+  }
+  if (clean.includes('ogg') || clean.includes('opus')) {
+    return 'audio/ogg';
+  }
+  if (clean.includes('webm')) {
+    return 'audio/webm';
+  }
+  return clean || 'audio/webm';
+}
+
+// Safe helper to parse JSON output which may include backticks/markdown fences
+function safeParseJSON(text: string): any {
+  let cleanText = text.trim();
+  if (cleanText.startsWith('```')) {
+    // Strip leading ```json or identical fences
+    cleanText = cleanText.replace(/^```(?:json)?\s*/i, '');
+    // Strip trailing ```
+    cleanText = cleanText.replace(/\s*```$/, '');
+  }
+  return JSON.parse(cleanText.trim());
+}
 
 // Lazy-loaded Gemini AI client to prevent crash on startup if key is missing
 let aiClient: GoogleGenAI | null = null;
@@ -14,6 +52,7 @@ function getGeminiClient(): GoogleGenAI {
     if (!key) {
       throw new Error('GEMINI_API_KEY environment variable is missing in secrets/env');
     }
+    console.log('[Gemini] Initializing GoogleGenAI client (User-Agent: aistudio-build).');
     aiClient = new GoogleGenAI({
       apiKey: key,
       httpOptions: {
@@ -325,6 +364,8 @@ app.post('/api/attendance/voice', async (req, res) => {
         - matchReason: A short description in Egyptian Arabic detailing why this was matched (e.g., "تطابق اسم الزوج والزوجة", "ذكر اسم الدلع أبو مارك خادم الاجتماع").
     `;
 
+    const sanitizedMime = cleanMimeType(mimeType);
+
     // Access Gemini Client lazily
     const ai = getGeminiClient();
 
@@ -334,7 +375,7 @@ app.post('/api/attendance/voice', async (req, res) => {
         parts: [
           {
             inlineData: {
-              mimeType: mimeType || 'audio/webm',
+              mimeType: sanitizedMime,
               data: audioBase64
             }
           },
@@ -372,7 +413,7 @@ app.post('/api/attendance/voice', async (req, res) => {
     });
 
     const bodyText = response.text || '{}';
-    const result = JSON.parse(bodyText.trim());
+    const result = safeParseJSON(bodyText);
 
     // Log the successful speech transaction
     addAuditLog(
@@ -429,6 +470,7 @@ app.post('/api/family/voice', async (req, res) => {
         - gender: 'ذكر' or 'أنثى' or ''.
     `;
 
+    const sanitizedMime = cleanMimeType(mimeType);
     const ai = getGeminiClient();
 
     const response = await ai.models.generateContent({
@@ -437,7 +479,7 @@ app.post('/api/family/voice', async (req, res) => {
         parts: [
           {
             inlineData: {
-              mimeType: mimeType || 'audio/webm',
+              mimeType: sanitizedMime,
               data: audioBase64
             }
           },
@@ -478,7 +520,7 @@ app.post('/api/family/voice', async (req, res) => {
     });
 
     const bodyText = response.text || '{}';
-    const result = JSON.parse(bodyText.trim());
+    const result = safeParseJSON(bodyText);
 
     addAuditLog(
       userEmail || 'system',

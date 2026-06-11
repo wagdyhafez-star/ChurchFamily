@@ -14,6 +14,7 @@ import FamilySection from './components/FamilySection';
 import VoiceRecognizer from './components/VoiceRecognizer';
 import ExcelManager from './components/ExcelManager';
 import SystemSettings from './components/SystemSettings';
+import LoginScreen from './components/LoginScreen';
 import { 
   isFirebaseConfigured, 
   fetchFamiliesFromFirebase, 
@@ -33,10 +34,16 @@ export default function App() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [users, setUsers] = useState<ChurchUser[]>([]);
-  const [activeUser, setActiveUser] = useState<ChurchUser>({
-    email: 'wagdy.hafez@gmail.com',
-    name: 'أ. وجدي حافظ',
-    role: 'Super Admin'
+  const [activeUser, setActiveUser] = useState<ChurchUser | null>(() => {
+    const saved = safeLocalStorage.getItem('church_logged_in_user');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
   });
 
   // Navigation and Layout modes
@@ -121,9 +128,11 @@ export default function App() {
           syncLocalDb(cloudFam, cloudAtt, cloudAud, finalUsers);
 
           // Update activeUser session
-          const exists = finalUsers.find((u: ChurchUser) => u.email === activeUser.email);
-          if (exists) {
-            setActiveUser(exists);
+          if (activeUser) {
+            const exists = finalUsers.find((u: ChurchUser) => u.email === activeUser.email);
+            if (exists) {
+              setActiveUser(exists);
+            }
           }
           setLoading(false);
           return;
@@ -161,9 +170,11 @@ export default function App() {
       }
 
       // If user profile changed in logs on system reset, update session
-      const exists = data.users?.find((u: ChurchUser) => u.email === activeUser.email);
-      if (exists) {
-        setActiveUser(exists);
+      if (activeUser) {
+        const exists = data.users?.find((u: ChurchUser) => u.email === activeUser.email);
+        if (exists) {
+          setActiveUser(exists);
+        }
       }
     } catch (err: any) {
       console.warn('[Hybrid Database Engine] Reverting to secure, zero-overhead browser LocalStorage database:', err.message);
@@ -214,6 +225,7 @@ export default function App() {
   };
 
   const addLocalAuditLog = (action: string, details: string, currentLogs: AuditLog[] = auditLogs) => {
+    if (!activeUser) return currentLogs;
     const newLog: AuditLog = {
       id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
@@ -225,6 +237,14 @@ export default function App() {
     const updated = [newLog, ...currentLogs].slice(0, 200);
     setAuditLogs(updated);
     return updated;
+  };
+
+  const handleLogout = () => {
+    if (activeUser) {
+      addLocalAuditLog('تسجيل الخروج', `قام الخادم ${activeUser.name} بتسجيل الخروج من النظام.`);
+    }
+    safeLocalStorage.removeItem('church_logged_in_user');
+    setActiveUser(null);
   };
 
   // API operations
@@ -742,7 +762,7 @@ export default function App() {
             onAddFamily={handleAddFamily}
             onEditFamily={handleEditFamily}
             onDeleteFamily={handleDeleteFamily}
-            userRole={activeUser.role}
+            userRole={activeUser!.role}
           />
         );
       case 'attendance':
@@ -751,7 +771,7 @@ export default function App() {
             families={families} 
             onAttendanceSaved={handleAttendanceSaved}
             onAddFamily={handleAddFamily}
-            userRole={activeUser.role}
+            userRole={activeUser!.role}
             initialTab="attendance"
             isOfflineMode={isOfflineMode}
           />
@@ -762,7 +782,7 @@ export default function App() {
             families={families} 
             onAttendanceSaved={handleAttendanceSaved}
             onAddFamily={handleAddFamily}
-            userRole={activeUser.role}
+            userRole={activeUser!.role}
             initialTab="enrollment"
             isOfflineMode={isOfflineMode}
           />
@@ -773,7 +793,7 @@ export default function App() {
             families={families} 
             onImportCompleted={handleImportCompleted}
             onAttendanceImported={handleBulkAttendanceImport}
-            userRole={activeUser.role}
+            userRole={activeUser!.role}
           />
         );
       case 'qr_attendance':
@@ -890,11 +910,11 @@ export default function App() {
           <SystemSettings 
             auditLogs={auditLogs}
             users={users}
-            activeUser={activeUser}
+            activeUser={activeUser!}
             onSelectUser={(usr) => setActiveUser(usr)}
             onRestoreDatabase={handleRestoreDatabase}
             onRebuildDatabaseConnection={handleRebuildDatabaseConnection}
-            userRole={activeUser.role}
+            userRole={activeUser!.role}
             isFirebaseActive={isFirebaseConfigured()}
             onSaveFirebaseConfig={handleSaveFirebaseConfigText}
             onMigrateToFirebase={handleMigrateToFirebase}
@@ -922,12 +942,23 @@ export default function App() {
           </div>
 
           {/* User Badge Profile info */}
-          <div className="bg-brand-active/70 p-2.5 rounded-xl border border-slate-700/80 space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse shrink-0" />
-              <span className="text-[11px] font-bold text-slate-200 truncate">{activeUser.name}</span>
+          <div className="bg-brand-active/70 p-2.5 rounded-xl border border-slate-700/80 flex items-center justify-between gap-2">
+            <div className="space-y-1 min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse shrink-0" />
+                <span className="text-[11px] font-bold text-slate-200 truncate">{activeUser?.name}</span>
+              </div>
+              <span className="text-[9px] text-slate-350 font-bold block bg-brand-sidebar/80 p-1 rounded-md text-center">{activeUser?.role}</span>
             </div>
-            <span className="text-[9px] text-slate-350 font-bold block bg-brand-sidebar/80 p-1 rounded-md text-center">{activeUser.role}</span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer shrink-0"
+              title="تسجيل الخروج"
+              id="logout_sidebar_btn"
+            >
+              <LogOut className="w-4 h-4 shrink-0" />
+            </button>
           </div>
 
           {/* Menu navigation options */}
@@ -1092,11 +1123,21 @@ export default function App() {
 
                 {/* Mobile screen appbar */}
                 <div className="bg-slate-950 text-white p-3.5 flex items-center justify-between z-10 shrink-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-950 text-xs font-bold bg-brand-accent w-6 h-6 rounded flex items-center justify-center">✝</span>
-                    <span className="text-xs font-black truncate max-w-[240px]">الكنيسة الانجيلية بمدينة نصر - اجتماع الأسرة</span>
+                  <div className="flex items-center gap-2 max-w-[180px]">
+                    <span className="text-slate-950 text-xs font-bold bg-brand-accent w-6 h-6 rounded flex items-center justify-center shrink-0">✝</span>
+                    <span className="text-xs font-black truncate">اجتماع الأسرة</span>
                   </div>
-                  <span className="text-[10px] font-bold text-slate-300 bg-slate-800 p-1 px-2 rounded-md">{activeUser.role}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-300 bg-slate-800 p-1 px-2 rounded-md">{activeUser?.role}</span>
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="p-1.5 hover:bg-slate-800 rounded text-slate-305 hover:text-rose-450 transition-colors cursor-pointer"
+                      title="تسجيل الخروج"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Main scrollable body viewport of the simulated mobile */}
@@ -1139,6 +1180,18 @@ export default function App() {
       ✨
     </span>
   );
+
+  if (!activeUser) {
+    return (
+      <LoginScreen 
+        onLoginSuccess={(user) => {
+          safeLocalStorage.setItem('church_logged_in_user', JSON.stringify(user));
+          setActiveUser(user);
+          fetchDatabase();
+        }}
+      />
+    );
+  }
 
   if (loading && families.length === 0) {
     return (
