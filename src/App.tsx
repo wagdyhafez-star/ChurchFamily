@@ -480,7 +480,7 @@ export default function App() {
         try {
           let successCount = 0;
           let failCount = 0;
-          for (const fam of mapped) {
+          const uploadPromises = mapped.map(async (fam) => {
             try {
               await saveFamilyToFirebase(fam);
               successCount++;
@@ -488,7 +488,8 @@ export default function App() {
               console.error(`[FirebaseSync] Failed to upload family to Firestore: ${fam.husbandName}`, err);
               failCount++;
             }
-          }
+          });
+          await Promise.all(uploadPromises);
           console.log(`[FirebaseSync] Bulk cloud sync completed: ${successCount} successfully saved, ${failCount} failed.`);
           await saveAuditLogToFirebase(updatedLogs[0]);
         } catch (err) {
@@ -500,9 +501,9 @@ export default function App() {
     }
 
     try {
-      // Loop import list sequentially
-      for (const fam of importedList) {
-        await fetch('/api/family', {
+      // Loop import list concurrently
+      const apiPromises = importedList.map(async (fam) => {
+        const res = await fetch('/api/family', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -511,8 +512,13 @@ export default function App() {
             userRole: activeUser.role
           })
         });
-      }
+        if (!res.ok) {
+          console.error(`[LocalImport] Failed to import family to server DB: ${fam.husbandName}`);
+        }
+      });
+      await Promise.all(apiPromises);
       await fetchDatabase();
+      alert('تم استيراد العائلات بنجاح وتسجيل عملية الاستيراد في الأرشيف.');
     } catch (err) {
       console.error(err);
       alert('فشل إكمال عملية الربط الشاملة للأسر المعينة.');
@@ -556,9 +562,10 @@ export default function App() {
 
       if (isCloud) {
         try {
-          for (const r of recsToSave) {
+          const cloudPromises = recsToSave.map(async (r) => {
             await saveAttendanceToFirebase(r);
-          }
+          });
+          await Promise.all(cloudPromises);
           await saveAuditLogToFirebase(updatedLogs[0]);
         } catch (err) {
           console.error('[FirebaseSync] Bulk attendance cloud error:', err);
@@ -569,8 +576,8 @@ export default function App() {
     }
 
     try {
-      for (const rec of records) {
-        await fetch('/api/attendance', {
+      const apiPromises = records.map(async (rec) => {
+        const res = await fetch('/api/attendance', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -581,7 +588,11 @@ export default function App() {
             userRole: activeUser.role
           })
         });
-      }
+        if (!res.ok) {
+          console.error('[LocalImport] Failed to import attendance on date:', rec.date);
+        }
+      });
+      await Promise.all(apiPromises);
       await fetchDatabase();
     } catch (err) {
       console.error(err);

@@ -263,16 +263,17 @@ export const fetchUsersFromFirebase = async (): Promise<ChurchUser[]> => {
 
 // Saves a single family
 export function cleanObjectForFirestore(obj: any): any {
-  if (obj === null || obj === undefined) return null;
+  if (obj === null || obj === undefined) return undefined;
   if (Array.isArray(obj)) {
-    return obj.map(cleanObjectForFirestore);
+    return obj.map(cleanObjectForFirestore).filter((item: any) => item !== undefined);
   }
   if (typeof obj === 'object') {
     const cleaned: any = {};
     for (const key of Object.keys(obj)) {
       if (key === 'isDuplicate') continue; // Skip UI flags used in ExcelManager
-      if (obj[key] !== undefined) {
-        cleaned[key] = cleanObjectForFirestore(obj[key]);
+      const val = cleanObjectForFirestore(obj[key]);
+      if (val !== undefined) {
+        cleaned[key] = val;
       }
     }
     return cleaned;
