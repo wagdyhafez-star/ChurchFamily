@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Users, Calendar, FileSpreadsheet, Mic, Shield, Layout, Smartphone, Eye, CheckCircle2, History, AlertCircle, Sparkles, LogOut, Clock, ArrowRight, CornerDownLeft, QrCode, Scan, UserPlus
+  Users, Calendar, FileSpreadsheet, Mic, Shield, Layout, Smartphone, Eye, CheckCircle2, History, AlertCircle, Sparkles, LogOut, Clock, ArrowRight, CornerDownLeft, QrCode, Scan, UserPlus, CheckSquare
 } from 'lucide-react';
 import { Family, AttendanceRecord, AuditLog, ChurchUser } from './types';
 import { safeLocalStorage } from './lib/safeStorage';
@@ -743,6 +743,7 @@ export default function App() {
   const MENU_ITEMS = [
     { id: 'dashboard', label: 'لوحة التحليلات', icon: Layout },
     { id: 'families', label: 'قاعدة بيانات الأسر', icon: Users },
+    { id: 'manual_attendance', label: 'التحضير والتسجيل اليدوي', icon: CheckSquare },
     { id: 'attendance', label: 'تسجيل الحضور بالصوت', icon: Mic },
     { id: 'voice_enrollment', label: 'تسجيل العائلات بالصوت', icon: UserPlus },
     { id: 'qr_attendance', label: 'تسجيل حضور سريع QR', icon: QrCode },
@@ -763,6 +764,18 @@ export default function App() {
             onEditFamily={handleEditFamily}
             onDeleteFamily={handleDeleteFamily}
             userRole={activeUser!.role}
+          />
+        );
+      case 'manual_attendance':
+        return (
+          <VoiceRecognizer 
+            families={families} 
+            attendance={attendance}
+            onAttendanceSaved={handleAttendanceSaved}
+            onAddFamily={handleAddFamily}
+            userRole={activeUser!.role}
+            initialTab="manual_attendance"
+            isOfflineMode={isOfflineMode}
           />
         );
       case 'attendance':

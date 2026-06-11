@@ -16,7 +16,7 @@ interface VoiceRecognizerProps {
   onAttendanceSaved: (date: string, attendedFamilyIds: string[], notes: string, mergeFlag?: boolean) => void;
   onAddFamily?: (familyData: Omit<Family, 'id' | 'createdAt'>) => Promise<boolean>;
   userRole: string;
-  initialTab?: 'attendance' | 'enrollment';
+  initialTab?: 'attendance' | 'enrollment' | 'manual_attendance';
   isOfflineMode?: boolean;
 }
 
@@ -51,10 +51,15 @@ const ENROLL_SPEECH_MOCKS = [
 ];
 
 export default function VoiceRecognizer({ families, attendance = [], onAttendanceSaved, onAddFamily, userRole, initialTab = 'attendance', isOfflineMode = false }: VoiceRecognizerProps) {
-  const [activeTab, setActiveTab] = useState<'attendance' | 'enrollment'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'attendance' | 'enrollment' | 'manual_attendance'>(initialTab);
 
   useEffect(() => {
     setActiveTab(initialTab);
+    if (initialTab === 'attendance') {
+      setInputMode('live');
+    } else if (initialTab === 'manual_attendance') {
+      setInputMode('manual');
+    }
   }, [initialTab]);
   const [meetingDate, setMeetingDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState<string>('');
@@ -77,7 +82,17 @@ export default function VoiceRecognizer({ families, attendance = [], onAttendanc
   const [candidates, setCandidates] = useState<any[]>([]);
   
   // Input modes: 'simulation' | 'live' | 'manual'
-  const [inputMode, setInputMode] = useState<'simulation' | 'live' | 'manual'>('manual');
+  const [inputMode, setInputMode] = useState<'simulation' | 'live' | 'manual'>(() => {
+    return initialTab === 'attendance' ? 'live' : 'manual';
+  });
+
+  useEffect(() => {
+    if (activeTab === 'manual_attendance') {
+      setInputMode('manual');
+    } else if (activeTab === 'attendance' && inputMode === 'manual') {
+      setInputMode('live');
+    }
+  }, [activeTab]);
   const useSimulation = inputMode === 'simulation';
   const [simulatedText, setSimulatedText] = useState(PRESET_SPEECH_MOCKS[0].text);
   const [showSimulateDropdown, setShowSimulateDropdown] = useState(false);
@@ -737,38 +752,247 @@ export default function VoiceRecognizer({ families, attendance = [], onAttendanc
   return (
     <div className="space-y-6 animate-fade-in" dir="rtl" id="voice_center_card">
       {/* Navigation switcher tabs at the very top */}
-      <div className="flex bg-slate-100 rounded-2xl p-1 border border-slate-200">
-        <button
-          onClick={() => {
-            setActiveTab('attendance');
-            setErrorMsg(null);
-          }}
-          className={`flex-1 py-3 text-center rounded-xl font-bold text-xs transition-all cursor-pointer flex justify-center items-center gap-2 ${
-            activeTab === 'attendance'
-              ? 'bg-white text-blue-700 shadow-sm'
-              : 'text-slate-600 hover:text-slate-800'
-          }`}
-        >
-          <CheckSquare className="w-4 h-4 text-emerald-600" />
-          رصد وتحضير الحضور الصوتي بالذكاء الاصطناعي
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab('enrollment');
-            setErrorMsg(null);
-          }}
-          className={`flex-1 py-3 text-center rounded-xl font-bold text-xs transition-all cursor-pointer flex justify-center items-center gap-2 ${
-            activeTab === 'enrollment'
-              ? 'bg-white text-blue-700 shadow-sm'
-              : 'text-slate-600 hover:text-slate-800'
-          }`}
-        >
-          <UserPlus className="w-4 h-4 text-blue-600" />
-          تسجيل وإضافة أسرة جديدة بالصوت الحقيقي (ميكروفون / محاكاة)
-        </button>
-      </div>
+      {activeTab !== 'manual_attendance' && (
+        <div className="flex bg-slate-100 rounded-2xl p-1 border border-slate-200">
+          <button
+            onClick={() => {
+              setActiveTab('attendance');
+              setErrorMsg(null);
+            }}
+            className={`flex-1 py-3 text-center rounded-xl font-bold text-xs transition-all cursor-pointer flex justify-center items-center gap-2 ${
+              activeTab === 'attendance'
+                ? 'bg-white text-blue-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-800'
+            }`}
+          >
+            <Mic className="w-4 h-4 text-blue-600" />
+            رصد وتحضير الحضور الصوتي بالذكاء الاصطناعي
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('enrollment');
+              setErrorMsg(null);
+            }}
+            className={`flex-1 py-3 text-center rounded-xl font-bold text-xs transition-all cursor-pointer flex justify-center items-center gap-2 ${
+              activeTab === 'enrollment'
+                ? 'bg-white text-blue-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-800'
+            }`}
+          >
+            <UserPlus className="w-4 h-4 text-blue-600" />
+            تسجيل وإضافة أسرة جديدة بالصوت الحقيقي (ميكروفون / محاكاة)
+          </button>
+        </div>
+      )}
 
-      {activeTab === 'attendance' ? (
+      {activeTab === 'manual_attendance' ? (
+        <>
+          {/* Dedicated Manual Attendance Section */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6">
+            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2.5">
+              <CheckSquare className="w-5 h-5 text-emerald-600 font-bold" />
+              التحضير والتسجيل اليدوي الفوري للملف
+            </h2>
+            <p className="text-xs text-slate-550 mt-1">
+              قم بتحضير الحضور يدوياً بالنقر مباشرة على العائلات الحاضرة وتحديد التاريخ ليتزامن مع قاعدة البيانات تلقائياً.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-700">تاريخ الاجتماع اليوم</label>
+                <input 
+                  type="date"
+                  value={meetingDate}
+                  onChange={(e) => setMeetingDate(e.target.value)}
+                  className="bg-white border border-slate-250 text-slate-800 rounded-xl text-xs font-bold p-2.5 outline-none focus:border-blue-500 font-mono transition-all"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5 font-sans">
+                <label className="text-xs font-bold text-slate-700">ملاحظات الاجتماع (مثال: كيهك، اجتماع خدمة...)</label>
+                <input 
+                  type="text"
+                  value={notes}
+                  placeholder="اكتب تفاصيل الاجتماع اليدوي هنا..."
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="bg-white border border-slate-250 text-slate-800 rounded-xl text-xs font-semibold p-2.5 outline-none focus:border-blue-500 transition-all"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5 font-sans">
+                <label className="text-xs font-bold text-slate-700">طريقة الحفظ لليوم المكرر</label>
+                <select
+                  value={mergeMode ? 'merge' : 'overwrite'}
+                  onChange={(e) => setMergeMode(e.target.value === 'merge')}
+                  className="bg-white border border-slate-250 text-slate-800 rounded-xl text-xs font-bold p-2.5 outline-none focus:border-blue-500 transition-all cursor-pointer"
+                >
+                  <option value="merge">➕ دمج وإضافة التسجيل الجديد مع الحالي</option>
+                  <option value="overwrite">🔄 استبدال الحضور المسجل بالكامل</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6 mt-6 animate-fade-in" id="manual_attendance_panel">
+            {/* Header and statistics */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-150 pb-4 mb-6">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <Users className="w-5 h-5 text-emerald-600" />
+                  دفتر تحضير وتسجيل الحضور المباشر بالنقرة
+                </h3>
+                <span className="text-xs text-slate-500 font-medium">سجل الحضور يدوياً بالنقر مباشرةً على بطاقة العائلة المحددة. يتزامن الحضور تلقائياً مع التاريخ المختار.</span>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-50 text-emerald-850 text-xs font-extrabold px-3 py-2 rounded-xl border border-emerald-100 font-mono">
+                  حاضر: {manualSelectedFamilyIds.length} عائلات
+                </div>
+                <div className="bg-slate-50 text-slate-600 text-xs font-semibold px-3 py-2 rounded-xl border border-slate-200/50 font-mono">
+                  غائب: {Math.max(0, families.length - manualSelectedFamilyIds.length)} عائلات
+                </div>
+              </div>
+            </div>
+
+            {/* Quick search input */}
+            <div className="relative mb-6">
+              <input
+                type="text"
+                value={manualSearchQuery}
+                onChange={(e) => setManualSearchQuery(e.target.value)}
+                placeholder="ابحث هنا عن عائلة بالاسم، لقب الزوج، الهاتف، العنوان، أو أسماء الأبناء..."
+                className="w-full bg-slate-50/50 border border-slate-250 text-slate-800 rounded-xl text-xs font-semibold py-3 px-10 outline-none focus:border-emerald-500 focus:bg-white transition-all text-right"
+                dir="rtl"
+              />
+              <div className="absolute right-3.5 top-3.5 text-slate-400">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              {manualSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setManualSearchQuery('')}
+                  className="absolute left-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Success indicator */}
+            {saveSuccessMsg && (
+              <motion.div 
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-800 rounded-xl p-4 text-xs font-bold text-center"
+              >
+                {saveSuccessMsg}
+              </motion.div>
+            )}
+
+            {/* Families Selection Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 max-h-[500px] overflow-y-auto p-1.5 border border-slate-100 rounded-2xl bg-slate-50/20">
+              {(() => {
+                const filtered = families.filter(fam => {
+                  const query = manualSearchQuery.trim().toLowerCase();
+                  if (!query) return true;
+                  return (
+                    fam.husbandName.toLowerCase().includes(query) ||
+                    fam.wifeName.toLowerCase().includes(query) ||
+                    (fam.husbandPhone && fam.husbandPhone.includes(query)) ||
+                    (fam.wifePhone && fam.wifePhone.includes(query)) ||
+                    (fam.address && fam.address.toLowerCase().includes(query)) ||
+                    (fam.notes && fam.notes.toLowerCase().includes(query)) ||
+                    (fam.children && fam.children.some(c => c.name.toLowerCase().includes(query)))
+                  );
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="col-span-full py-20 text-center text-slate-400 space-y-2">
+                      <Users className="w-8 h-8 mx-auto stroke-1" />
+                      <span className="text-xs font-bold block">لم يتم العثور على أي عائلات متطابقة مع البحث.</span>
+                    </div>
+                  );
+                }
+
+                return filtered.map(fam => {
+                  const isSelected = manualSelectedFamilyIds.includes(fam.id);
+                  return (
+                    <div
+                      key={fam.id}
+                      onClick={() => handleToggleManualFamily(fam.id)}
+                      className={`border rounded-xl p-3.5 cursor-pointer transition-all flex items-start gap-3 relative overflow-hidden select-none ${
+                        isSelected 
+                          ? 'bg-emerald-50/70 border-emerald-400 ring-1 ring-emerald-500/10 shadow-sm' 
+                          : 'bg-white border-slate-200 hover:border-slate-350 hover:bg-slate-50/60 shadow-xs'
+                      }`}
+                    >
+                       {/* Circle select tag */}
+                      <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                        isSelected 
+                          ? 'bg-emerald-600 border-emerald-600 text-white' 
+                          : 'border-slate-300 bg-white'
+                      }`}>
+                        {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                      </div>
+
+                      <div className="flex-1 min-w-0 text-right">
+                        <h4 className="font-bold text-slate-900 text-xs truncate">
+                          {fam.husbandName}
+                        </h4>
+                        <h5 className="font-bold text-slate-700 text-[11px] truncate mt-0.5">
+                          {fam.wifeName}
+                        </h5>
+                        
+                        <p className="text-[10px] text-slate-500 mt-1.5 flex items-center gap-1 font-mono truncate leading-none justify-end">
+                          <span>{fam.husbandPhone || fam.wifePhone || 'بدون تليفون'}</span>
+                          <Phone className="w-2.5 h-2.5 text-slate-400" />
+                        </p>
+
+                        {fam.children && fam.children.length > 0 ? (
+                          <span className="inline-block mt-2 bg-blue-50 text-blue-700 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md border border-blue-100">
+                            الأبناء: {fam.children.length}
+                          </span>
+                        ) : (
+                          <span className="inline-block mt-2 bg-stone-50 text-stone-500 text-[9px] font-bold px-1.5 py-0.5 rounded-md border border-stone-200/50">
+                            لا يوجد أبناء
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Slide color accent */}
+                      {isSelected && (
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-600" />
+                      )}
+                    </div>
+                  );
+                })
+              })()}
+            </div>
+
+            {/* Action save bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 border-t border-slate-100 pt-5">
+              <div className="text-xs text-slate-550 font-semibold text-right sm:text-right leading-relaxed font-sans">
+                * يتم تسجيل الحضور بشكل دوري. يمكنك مراجعة كشوف حضور اليوم أو أي تاريخ سابق من الرسوم البيانية أيضاً.
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  disabled={userRole === 'Viewer'}
+                  onClick={handleSaveManualAttendance}
+                  className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-600/10 cursor-pointer"
+                >
+                  <Check className="w-4 h-4 stroke-[2.5]" />
+                  حفظ وتأكيد كشف الحضور اليدوي ({manualSelectedFamilyIds.length})
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : activeTab === 'attendance' ? (
         <>
           {/* Attendance Section */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-premium p-6">
@@ -819,21 +1043,6 @@ export default function VoiceRecognizer({ families, attendance = [], onAttendanc
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 mt-5 border-t border-slate-100 pt-4">
               <span className="text-xs font-bold text-slate-600 shrink-0">نظام الإدخال والتحضير:</span>
               <div className="flex flex-wrap bg-slate-100 rounded-xl p-0.5 border border-slate-200/40 gap-0.5" id="input_mode_toggle_group">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInputMode('manual');
-                    setErrorMsg(null);
-                  }}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                    inputMode === 'manual' 
-                      ? 'bg-white text-slate-900 shadow-sm' 
-                      : 'text-slate-500 hover:text-slate-850'
-                  }`}
-                >
-                  <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                  التحضير والتسجيل اليدوي الفوري
-                </button>
                 <button
                   type="button"
                   onClick={() => {
